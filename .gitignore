@@ -1,0 +1,6 @@
+
+/.idea
+/models/__pycache__
+/__pycache__
+database.sqlite3
+test.py
