@@ -3,16 +3,17 @@ import aiosmtplib
 import configparser
 from itsdangerous import URLSafeTimedSerializer
 from werkzeug.security import generate_password_hash, check_password_hash
-from main import url_for, db, session, redirect
+import main
 
 config = configparser.ConfigParser()
 config.read('config.conf')
 
-EMAIL = config['email']['email']
-PASSWORD = config['email']['password']
+# EMAIL = config['email']['email']
+PASSWORD = config['email']['smtp_password']
 SMTP_SERVER = config['email']['smtp_server']
 SMTP_PORT = config['email']['smtp_port']
-EMAIL_USERNAME = config['email']['email_username']
+EMAIL_USERNAME = config['email']['smtp_username']
+SMTP_USE_TLS = config['email']['smtp_use_tls']
 SECRET_KEY = config['app']['secret_key']
 SECURITY_PASSWORD_SALT =  config['app']['security_password_salt']
 
@@ -22,7 +23,7 @@ async def send_email(email, subject, message):
         await smtp.starttls()
         await smtp.login(EMAIL_USERNAME, PASSWORD)
         message = f"Subject: {subject}\n\n{message}"
-        await smtp.sendmail(EMAIL, email, message)
+        await smtp.sendmail(EMAIL_USERNAME, email, message)
         await smtp.quit()
 
 async def generate_confirmation_token(email):
@@ -43,7 +44,7 @@ async def confirm_token(token, expiration=3600):
 
 async def send_confirmation_email(email):
     token = await generate_confirmation_token(email)
-    confirm_url = url_for('confirm_email', token=token, _external=True)
+    confirm_url = main.url_for('confirm_email', token=token, _external=True)
     html = f'Please click the link to confirm your email: <a href="{confirm_url}">{confirm_url}</a>'
     subject = "Please confirm your email"
     return await send_email(email, subject, html)
@@ -53,15 +54,15 @@ async def confirm_email(token):
         email = confirm_token(token)
     except:
         return 'The confirmation link is invalid or has expired.', 400
-    info = await db(r"SELECT * FROM inactive_users WHERE email = '{}'".format(email))
+    info = await main.db(r"SELECT * FROM inactive_users WHERE email = '{}'".format(email))
     if len(info) == 0:
         return 'User not found', 404
     else:
-        await db(r"INSERT INTO users (username, password, email) VALUES ('{}', '{}', '{}')".format(info[0][0], info[0][1], info[0][2]))
-        await db(r"DELETE FROM inactive_users WHERE email = '{}'".format(email))
+        await main.db(r"INSERT INTO users (username, password, email) VALUES ('{}', '{}', '{}')".format(info[0][0], info[0][1], info[0][2]))
+        await main.db(r"DELETE FROM inactive_users WHERE email = '{}'".format(email))
     return 'You have confirmed your account. You can now login.', 200
 
 async def check_user(session_id):
-    if session_id is None or session_id not in session:
-        return redirect(url_for('login'))
-    return session[session_id]
+    if session_id is None or session_id not in main.session:
+        return main.redirect(main.url_for('login'))
+    return main.session[session_id]
