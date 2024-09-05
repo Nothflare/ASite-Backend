@@ -24,14 +24,6 @@ def initialize_database():
                 )
             ''')
             db.execute('''
-                CREATE TABLE inactive_users (
-                    username TEXT NOT NULL UNIQUE,
-                    password TEXT NOT NULL,
-                    email TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                )
-            ''')
-            db.execute('''
                 CREATE TABLE posts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     title TEXT NOT NULL,
@@ -50,6 +42,14 @@ def initialize_database():
                     vote INTEGER,
                     FOREIGN KEY(post_id) REFERENCES posts(id),
                     FOREIGN KEY(user_id) REFERENCES users(id)
+                )
+            ''')
+            db.execute('''
+                CREATE TABLE inactive_users (
+                    username TEXT NOT NULL UNIQUE,
+                    password TEXT NOT NULL,
+                    email TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             db.commit()

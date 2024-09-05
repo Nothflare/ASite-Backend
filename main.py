@@ -1,12 +1,14 @@
 import re
 from functools import wraps
 from flask import Flask, jsonify, request, make_response, session, url_for, sessions, redirect
+from flask_cors import CORS
 import json
 import asyncio
 from models import dash, posts, users, auth
 import secrets
 import aiosqlite
 import configparser
+
 
 '''
 database format:
@@ -39,6 +41,7 @@ database format:
     - vote
 '''
 app = Flask(__name__)
+CORS(app)
 app.config['JSONIFY_PRETTYPRINT_REGULAR'] = True
 
 loop = asyncio.get_event_loop()
@@ -48,6 +51,7 @@ config.read('config.conf')
 
 DATABASE_PATH = config['database']['path']
 SECRET_KEY = config['app']['secret_key']
+app.secret_key = SECRET_KEY
 
 async def db(exp, params=None):
     try:
@@ -81,13 +85,18 @@ async def index():
 @app.route("/signup", methods=['POST'])
 async def signup():
     if request.method == 'POST':
-        if 'username' in request.form and 'password' in request.form and 'email' in request.form:
-            username = request.form['username']
-            password = request.form['password']
-            email = request.form['email']
-            return await (users.signup(username, password, email))
-        else:
-            return "Missing form data", 400
+        try:
+            # in json format
+            data = json.loads(request.data)
+            username = data.get('username')
+            password = data.get('password')
+            email = data.get('email')
+            if not username or not password or not email:
+                return "Missing username, password or email", 400
+            return await users.signup(username, password, email)
+        except Exception as e:
+            print(f"An error occurred during signup: {e}")
+            return "Internal Server Error", 500
     return "Invalid request method", 405
 
 @app.route('/confirm/<token>')
@@ -96,10 +105,17 @@ async def confirm_email(token):
 
 @app.route("/login", methods=['POST'])
 async def login():
-    username = request.form['username']
-    password = request.form['password']
-    return await (users.
-                  login(username, password))
+    try:
+        # in json format
+        data = json.loads(request.data)
+        username = data.get('username')
+        password = data.get('password')
+        if not username or not password:
+            return "Missing username or password", 400
+        return await users.login(username, password)
+    except Exception as e:
+        print(f"An error occurred during login: {e}")
+        return "Internal Server Error", 500
 
 @app.route("/get_user")
 async def get_user():
