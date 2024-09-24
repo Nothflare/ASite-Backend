@@ -9,37 +9,6 @@ import secrets
 import aiosqlite
 import configparser
 
-
-'''
-database format:
-- users
-    - id
-    - username
-    - password
-    - email
-    - created_at
-    - updated_at
-    - bio
-    - profile_pic
-    - login_status
-- inactive_users
-    - username
-    - password
-    - email
-    - created_at
-- posts
-    - id
-    - title
-    - content
-    - author
-    - created_at
-    - updated_at
-- votes
-    - id
-    - post_id
-    - user_id
-    - vote
-'''
 app = Flask(__name__)
 CORS(app)
 app.config['JSONIFY_PRETTYPRINT_REGULAR'] = True
@@ -51,6 +20,7 @@ config.read('config.conf')
 
 DATABASE_PATH = config['database']['path']
 SECRET_KEY = config['app']['secret_key']
+BACKEND_VERSION = config['app']['version']
 app.secret_key = SECRET_KEY
 
 async def db(exp, params=None):
@@ -80,7 +50,7 @@ def login_required(f):
 
 @app.route("/")
 async def index():
-    return await dash.pong()
+    return BACKEND_VERSION, 200
 
 @app.route("/signup", methods=['POST'])
 async def signup():
@@ -101,7 +71,12 @@ async def signup():
 
 @app.route('/confirm/<token>')
 async def confirm_email(token):
-    return await auth.confirm_email(token)
+    try:
+        response, status_code = await auth.confirm_email(token)
+        return response, status_code
+    except Exception as e:
+        print(f"An error occurred while confirming email: {e}")
+        return "Internal Server Error", 500
 
 @app.route("/login", methods=['POST'])
 async def login():
@@ -117,14 +92,90 @@ async def login():
         print(f"An error occurred during login: {e}")
         return "Internal Server Error", 500
 
-@app.route("/get_user")
-async def get_user():
-    user_id = request.args.get('id')
-    return await users.get_user(1,user_id)
+@app.route("/modify_user", methods=['POST'])
+async def modify_user():
+    try:
+        session_id = request.cookies.get('session_id')
+        if not session_id:
+            return "Unauthorized", 401
 
-@app.route("/get_posts")
-async def get_posts():
-    return await posts.get_posts(1)
+        data = json.loads(request.data)
+        target_user = data.get('target_user')
+        action = data.get('action')
+        password = data.get('password')
+        bio = data.get('bio')
+
+        if not target_user or not action:
+            return "Missing target_user or action", 400
+
+        response, status_code = await users.modify_user(session_id, target_user, action, password, bio)
+        return response, status_code
+    except Exception as e:
+        print(f"An error occurred while modifying the user: {e}")
+        return "Internal Server Error", 500
+
+@app.route("/get_post_details/<int:post_id>", methods=['GET'])
+async def get_post_list(post_id):
+    try:
+        session_id = request.cookies.get('session_id')
+        if not session_id:
+            return "Unauthorized", 401
+
+        response, status_code = await posts.get_details(session_id, post_id)
+        return response, status_code
+    except Exception as e:
+        print(f"An error occurred while fetching post list: {e}")
+        return "Internal Server Error", 500
+
+@app.route("/get_list/<post_type>", methods=['GET'])
+async def get_post_list(post_type):
+    try:
+        session_id = request.cookies.get('session_id')
+        if not session_id:
+            return "Unauthorized", 401
+
+        start_from = request.args.get('start_from', 0)
+        response, status_code = await posts.get_posts(session_id, post_type, int(start_from))
+        return response, status_code
+    except Exception as e:
+        print(f"An error occurred while fetching post list: {e}")
+        return "Internal Server Error", 500
+@app.route("/vote", methods=['POST'])
+async def vote():
+    try:
+        session_id = request.cookies.get('session_id')
+        if not session_id:
+            return "Unauthorized", 401
+        data = json.loads(request.data)
+        post_id = data.get('post_id')
+        opinion = data.get('opinion')
+        if not post_id or not opinion:
+            return "Missing post_id or opinion", 400
+        return await posts.vote(session_id, post_id, opinion)
+    except Exception as e:
+        print(f"An error occurred while submitting vote: {e}")
+        return "Internal Server Error", 500
+
+@app.route("/modify_post", methods=['POST'])
+async def modify_post():
+    try:
+        session_id = request.cookies.get('session_id')
+        if not session_id:
+            return "Unauthorized", 401
+        data = json.loads(request.data)
+        post_id = data.get('post_id')
+        action = data.get('action')
+        title = data.get('title')
+        content = data.get('content')
+        label = data.get('label')
+        permission = data.get('permission')
+        if not post_id or not action:
+            return "Missing post_id or action", 400
+        return await posts.modify_post(session_id, post_id, action, title, content, label, permission)
+    except Exception as e:
+        print(f"An error occurred while modifying the post: {e}")
+        return "Internal Server Error", 500
+
 
 
 

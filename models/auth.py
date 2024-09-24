@@ -18,13 +18,16 @@ SECRET_KEY = config['app']['secret_key']
 SECURITY_PASSWORD_SALT =  config['app']['security_password_salt']
 
 async def send_email(email, subject, message):
-    async with aiosmtplib.SMTP(hostname=SMTP_SERVER, port=SMTP_PORT) as smtp:
-        await smtp.connect()
-        await smtp.starttls()
-        await smtp.login(EMAIL_USERNAME, PASSWORD)
-        message = f"Subject: {subject}\n\n{message}"
-        await smtp.sendmail(EMAIL_USERNAME, email, message)
-        await smtp.quit()
+    try:
+        async with aiosmtplib.SMTP(hostname=SMTP_SERVER, port=SMTP_PORT) as smtp:
+            await smtp.connect()
+            await smtp.starttls()
+            await smtp.login(EMAIL_USERNAME, PASSWORD)
+            message = f"Subject: {subject}\n\n{message}"
+            await smtp.sendmail(EMAIL_USERNAME, email, message)
+            await smtp.quit()
+    except aiosmtplib.SMTPException as e:
+        raise
 
 async def generate_confirmation_token(email):
     serializer = URLSafeTimedSerializer(SECRET_KEY)
@@ -50,19 +53,24 @@ async def send_confirmation_email(email):
     return await send_email(email, subject, html)
 
 async def confirm_email(token):
-    try:
-        email = confirm_token(token)
-    except:
+    email = await confirm_token(token)
+    if not email:
         return 'The confirmation link is invalid or has expired.', 400
-    info = await main.db(r"SELECT * FROM inactive_users WHERE email = '{}'".format(email))
-    if len(info) == 0:
-        return 'User not found', 404
-    else:
-        await main.db(r"INSERT INTO users (username, password, email) VALUES ('{}', '{}', '{}')".format(info[0][0], info[0][1], info[0][2]))
-        await main.db(r"DELETE FROM inactive_users WHERE email = '{}'".format(email))
+
+    try:
+        info = await main.db("SELECT * FROM unverified_users WHERE email = %s", (email,))
+        if not info:
+            return 'User not found', 404
+
+        await main.db("INSERT INTO users (username, password, email) VALUES (%s, %s, %s)", (info[0][0], info[0][1], info[0][2]))
+        await main.db("DELETE FROM unverified_users WHERE email = %s", (email,))
+    except Exception as e:
+        return 'Internal Server Error', 500
+
     return 'You have confirmed your account. You can now login.', 200
 
 async def check_user(session_id):
     if session_id is None or session_id not in main.session:
         return main.redirect(main.url_for('login'))
     return main.session[session_id]
+
