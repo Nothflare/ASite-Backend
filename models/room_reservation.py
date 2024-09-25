@@ -1,7 +1,7 @@
 import main
 import datetime
 
-async def create_room(session_id, name, open_time, close_time, available_days):
+async def create_room(session_id, name, open_time, close_time, available_days, unavailable_periods):
     try:
         username = await main.users.get_username_from_session(session_id)
         is_admin = await main.users.check_if_user_is_admin(username, 'global')
@@ -9,13 +9,17 @@ async def create_room(session_id, name, open_time, close_time, available_days):
             is_admin = await main.users.check_if_user_is_admin(username, 'room')
         if not is_admin:
             return 'Unauthorized', 401
-        await main.db("INSERT INTO rooms (name, open_time, close_time, available_days) VALUES (?, ?, ?, ?)", (name, open_time, close_time, available_days))
+
+        await main.db(
+            "INSERT INTO rooms (name, open_time, close_time, available_days, unavailable_periods) VALUES (?, ?, ?, ?, ?)",
+            (name, open_time, close_time, ','.join(map(str, available_days)), ','.join(map(str, unavailable_periods)))
+        )
         return 'Room created', 200
     except Exception as e:
         print(f"An error occurred while creating room: {e}")
         return 'Internal Server Error', 500
 
-async def modify_room(session_id, room_id, name=None, open_time=None, close_time=None, available_days=None, status=None):
+async def modify_room(session_id, room_id, name=None, open_time=None, close_time=None, available_days=None, unavailable_periods=None, status=None):
     try:
         username = await main.users.get_username_from_session(session_id)
         is_admin = await main.users.check_if_user_is_admin(username, 'global')
@@ -23,20 +27,33 @@ async def modify_room(session_id, room_id, name=None, open_time=None, close_time
             is_admin = await main.users.check_if_user_is_admin(username, 'room')
         if not is_admin:
             return 'Unauthorized', 401
+
         query = "UPDATE rooms SET "
+        params = []
         if name:
-            query += f"name = '{name}', "
+            query += "name = ?, "
+            params.append(name)
         if open_time:
-            query += f"open_time = '{open_time}', "
+            query += "open_time = ?, "
+            params.append(open_time)
         if close_time:
-            query += f"close_time = '{close_time}', "
+            query += "close_time = ?, "
+            params.append(close_time)
         if available_days:
-            query += f"available_days = '{available_days}', "
+            query += "available_days = ?, "
+            params.append(','.join(map(str, available_days)))
+        if unavailable_periods:
+            query += "unavailable_periods = ?, "
+            params.append(','.join(map(str, unavailable_periods)))
         if status:
-            query += f"status = '{status}', "
-        query = query[:-2]
-        query += f" WHERE id = {room_id}"
-        await main.db(query)
+            query += "status = ?, "
+            params.append(status)
+
+        query = query.rstrip(', ')
+        query += " WHERE id = ?"
+        params.append(room_id)
+
+        await main.db(query, params)
         return 'Room modified', 200
     except Exception as e:
         print(f"An error occurred while modifying room: {e}")
@@ -65,18 +82,20 @@ async def get_rooms(session_id, admin = False):
                 is_admin = await main.users.check_if_user_is_admin(username, 'room')
             if not is_admin:
                 return 'Unauthorized', 401
-            rooms = await main.db("SELECT id, name FROM rooms WHERE status = 1")
+            rooms = await main.db("SELECT * FROM rooms")
+
         else:
             username = await main.users.get_username_from_session(session_id)
             if not username:
                 return 'Unauthorized', 401
-            # return all rooms id, name, open_time, close_time, available_days, status in json format
-            rooms = await main.db("SELECT * FROM rooms")
+            rooms = await main.db("SELECT id, name FROM rooms WHERE status = 1")
         rooms = main.json.dumps(rooms)
         return rooms, 200
     except Exception as e:
         print(f"An error occurred while fetching rooms: {e}")
         return 'Internal Server Error', 500
+
+import datetime
 
 async def get_available_rooms_by_time(session_id, start_time, end_time):
     try:
@@ -90,7 +109,7 @@ async def get_available_rooms_by_time(session_id, start_time, end_time):
 
         # Query to get active and open rooms available on the specified days
         query = """
-        SELECT r.id, r.name
+        SELECT r.id, r.name, r.unavailable_periods
         FROM rooms r
         LEFT JOIN reservations res ON r.id = res.room_id
         WHERE r.status = 1
@@ -101,8 +120,22 @@ async def get_available_rooms_by_time(session_id, start_time, end_time):
              (res.end_time NOT BETWEEN ? AND ?))
         """
         rooms = await main.db(query, (start_day, end_day, start_time, end_time, start_time, end_time))
-        rooms = main.json.dumps(rooms)
-        return rooms, 200
+
+        available_rooms = []
+        for room in rooms:
+            room_id, room_name, unavailable_periods_str = room
+            unavailable_periods = unavailable_periods_str.split(',') if unavailable_periods_str else []
+            is_available = True
+            for period in unavailable_periods:
+                period_start, period_end = period.split('-')
+                if (start_time < period_end and end_time > period_start):
+                    is_available = False
+                    break
+            if is_available:
+                available_rooms.append((room_id, room_name))
+
+        available_rooms = main.json.dumps(available_rooms)
+        return available_rooms, 200
     except Exception as e:
         print(f"An error occurred while fetching available rooms: {e}")
         return 'Internal Server Error', 500
@@ -113,14 +146,19 @@ async def get_available_times_by_room(session_id, room_id, start_time, end_time)
         if not username:
             return 'Unauthorized', 401
 
+        # Intervals should not longer than 3 hours
+        if (datetime.datetime.strptime(end_time, '%Y-%m-%d %H:%M:%S') - datetime.datetime.strptime(start_time, '%Y-%m-%d %H:%M:%S')).seconds > 10800:
+            return 'Intervals should not longer than 3 hours', 400
+
         # Get room details
-        room_query = "SELECT open_time, close_time, available_days FROM rooms WHERE id = ? AND status = 1"
+        room_query = "SELECT open_time, close_time, available_days, unavailable_periods FROM rooms WHERE id = ? AND status = 1"
         room = await main.db(room_query, (room_id,))
         if not room:
             return 'Room not found or inactive', 404
 
-        open_time, close_time, available_days = room[0]
+        open_time, close_time, available_days, unavailable_periods_str = room[0]
         available_days = list(map(int, available_days.split(',')))
+        unavailable_periods = unavailable_periods_str.split(',') if unavailable_periods_str else []
 
         # Get the day of the week for the start_time (1=Sunday, 7=Saturday)
         start_day = datetime.datetime.strptime(start_time, '%Y-%m-%d %H:%M:%S').isoweekday() % 7 + 1
@@ -150,6 +188,13 @@ async def get_available_times_by_room(session_id, room_id, start_time, end_time)
                 res_end = datetime.datetime.strptime(reservation[1], '%Y-%m-%d %H:%M:%S')
                 if res_start <= current_time < res_end:
                     next_time = min(next_time, res_start)
+                    break
+            for period in unavailable_periods:
+                period_start, period_end = period.split('-')
+                period_start = datetime.datetime.strptime(period_start, '%Y-%m-%d %H:%M:%S')
+                period_end = datetime.datetime.strptime(period_end, '%Y-%m-%d %H:%M:%S')
+                if period_start <= current_time < period_end:
+                    next_time = min(next_time, period_start)
                     break
             if current_time < next_time:
                 available_times.append((current_time.strftime('%Y-%m-%d %H:%M:%S'), next_time.strftime('%Y-%m-%d %H:%M:%S')))
@@ -212,10 +257,12 @@ async def reserve_room(session_id, room_id, for_group, reason, start_time, end_t
         username = await main.users.get_username_from_session(session_id)
         if not username:
             return 'Unauthorized', 401
-
-        # Check if the user has permission to post room reservations
         if not (await main.groups.get_post_permissions(session_id, for_group, 'room_reservation')):
             return 'Unauthorized', 401
+
+        # Check if the interval is longer than 3 hours
+        if (datetime.datetime.strptime(end_time, '%Y-%m-%d %H:%M:%S') - datetime.datetime.strptime(start_time, '%Y-%m-%d %H:%M:%S')).seconds > 10800:
+            return 'Intervals should not be longer than 3 hours', 400
 
         # Check if the room is available between start_time and end_time
         availability_query = """
@@ -228,6 +275,25 @@ async def reserve_room(session_id, room_id, for_group, reason, start_time, end_t
         count = await main.db(availability_query, (room_id, start_time, end_time, start_time, end_time))
         if count[0][0] > 0:
             return 'Room is not available during the specified time', 400
+
+        # Get room details
+        room_query = "SELECT open_time, close_time, available_days, unavailable_periods FROM rooms WHERE id = ? AND status = 1"
+        room = await main.db(room_query, (room_id,))
+        if not room:
+            return 'Room not found or inactive', 404
+
+        open_time, close_time, available_days, unavailable_periods_str = room[0]
+        available_days = list(map(int, available_days.split(',')))
+        unavailable_periods = unavailable_periods_str.split(',') if unavailable_periods_str else []
+        start_day = datetime.datetime.strptime(start_time, '%Y-%m-%d %H:%M:%S').isoweekday() % 7 + 1
+        end_day = datetime.datetime.strptime(end_time, '%Y-%m-%d %H:%M:%S').isoweekday() % 7 + 1
+
+        if start_day not in available_days or end_day not in available_days:
+            return 'Room not available on the specified days', 400
+        for period in unavailable_periods:
+            period_start, period_end = period.split('-')
+            if start_time < period_end and end_time > period_start:
+                return 'Room is not available during the specified time', 400
 
         # Insert the reservation into the database and get the reservation_id
         insert_query = """

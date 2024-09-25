@@ -52,11 +52,6 @@ async def confirm_email(token):
 
     return 'You have confirmed your account. You can now login.', 200
 
-async def check_user(session_id):
-    if session_id is None or session_id not in main.session:
-        return main.redirect(main.url_for('login'))
-    return main.session[session_id]
-
 async def forget_password(email):
     try:
         res = await main.db("SELECT * FROM users WHERE email = ?", (email,))

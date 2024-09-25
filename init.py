@@ -57,6 +57,7 @@ database format:
     - open_time
     - close_time
     - available_days
+    - unavailable_periods
     - status
 - reservations
     - id
@@ -143,6 +144,7 @@ def initialize_database():
                     open_time TIMESTAMP,
                     close_time TIMESTAMP,
                     available_days TEXT,
+                    unavailable_periods TEXT,
                     status INTEGER DEFAULT 1
                 )
             ''')
