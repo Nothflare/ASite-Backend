@@ -229,13 +229,18 @@ async def reserve_room(session_id, room_id, for_group, reason, start_time, end_t
         if count[0][0] > 0:
             return 'Room is not available during the specified time', 400
 
-        # Insert the reservation into the database
+        # Insert the reservation into the database and get the reservation_id
         insert_query = """
         INSERT INTO reservations (room_id, username, for, reason, start_time, end_time, approval_status)
         VALUES (?, ?, ?, ?, ?, ?, 0)  -- 0 means pending approval
         """
-        await main.db(insert_query, (room_id, username, for_group, reason, start_time, end_time))
+        reservation_id = await main.db(insert_query, (room_id, username, for_group, reason, start_time, end_time), return_last_id=True)
+
         # Send email to user
+        user_email = await main.users.get_user_email_from_session(session_id)
+        email_subject = "Room Reservation Created"
+        email_body = f"Your reservation (ID: {reservation_id}) for room {room_id} from {start_time} to {end_time} is pending approval."
+        await main.send_email(user_email, email_subject, email_body)
 
         return 'Reservation created and pending approval', 200
     except Exception as e:
@@ -260,6 +265,8 @@ async def cancel_reservation(session_id, reservation_id):
     except Exception as e:
         print(f"An error occurred while canceling the reservation: {e}")
         return 'Internal Server Error', 500
+
+
 async def approve_reservation(session_id, reservation_id, action, reason):
     try:
         username = await main.users.get_username_from_session(session_id)
@@ -271,14 +278,37 @@ async def approve_reservation(session_id, reservation_id, action, reason):
 
         if action == 'approve':
             approval_status = 1
+            email_subject = "Room Reservation Approved"
         elif action == 'reject':
             approval_status = 2
+            email_subject = "Room Reservation Rejected"
         else:
             return 'Invalid action', 400
 
+        # Retrieve reservation details
+        reservation = await main.db(
+            "SELECT name, start_time, end_time FROM reservations WHERE id = ?",
+            (reservation_id,))
+        if not reservation:
+            return 'Reservation not found', 404
+
         # Update the reservation
-        await main.db("UPDATE reservations SET approval_status = ?, approved_by = ?, approved_at = NOW(), approved_reason = ? WHERE id = ?", (approval_status, username, reason, reservation_id))
-        return 'Reservation ' + action + 'ed', 200
+        await main.db(
+            "UPDATE reservations SET approval_status = ?, approved_by = ?, approved_at = NOW(), approved_reason = ? WHERE id = ?",
+            (approval_status, username, reason, reservation_id))
+
+        room_name, start_time, end_time = reservation[0]
+
+        # Send email to user
+        user_email = await main.users.get_user_email_from_session(session_id)
+        if action == 'approve':
+            email_body = f"Your reservation (ID: {reservation_id}) for room {room_name} from {start_time} to {end_time} has been approved."
+        else:
+            email_body = f"Your reservation (ID: {reservation_id}) for room {room_name} from {start_time} to {end_time} has been rejected. Reason: {reason}"
+
+        await main.send_email(user_email, email_subject, email_body)
+
+        return f'Reservation {action}ed', 200
     except Exception as e:
         print(f"An error occurred while approving the reservation: {e}")
         return 'Internal Server Error', 500
