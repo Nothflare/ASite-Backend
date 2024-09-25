@@ -1,6 +1,4 @@
 import main
-from models.users import reset_password
-
 
 # permission in database is a list of group ids that can view the post (e.g. 1, 2, 3)
 # permission = None means everyone can view the post
@@ -24,7 +22,7 @@ async def create_post(session_id, title, content, post_type, permission, post_as
         # Check if post_as group id is in the user's group list
         if post_as not in group_ids:
             return "Unauthorized", 401
-        if not main.groups.get_post_permissions(session_id, post_as, "can_post_"+post_type):
+        if not main.groups.get_post_permissions(session_id, post_as, post_type):
             return "Unauthorized", 401
         # If permission is not None, check if post_as group id is in the permission list
         if permission is not None:
@@ -46,28 +44,25 @@ async def create_post(session_id, title, content, post_type, permission, post_as
         print(f"An error occurred while creating the post: {e}")
         return "Internal Server Error", 500
 
-async def get_posts(session_id, post_type, start_from=0, view_type='public', id=None):
+async def get_posts(session_id, post_type, start_from=0, view_type='public', id=None, admin=False):
     try:
+        if admin:
+            username = await main.users.get_username_from_session(session_id)
+            is_admin = await main.users.check_if_user_is_admin(username, 'global')
+            if not is_admin:
+                return "Unauthorized", 401
         if view_type == 'public':
             res = await main.db("SELECT id, title, author, label, created_at, start_at, end_at, post_as FROM posts WHERE post_type = ? AND permission IS NULL LIMIT 30 OFFSET ?", (post_type, start_from))
         elif view_type == 'my':
             user = await main.users.get_username_from_session(session_id)
             res = await main.db("SELECT id, title, author, label, created_at, start_at, end_at, post_as FROM posts WHERE author = ? AND post_type = ? LIMIT 30 OFFSET ?", (user, post_type, start_from))
         elif view_type == 'user' and id:
-            user_groups = await main.groups.get_user_groups(session_id)
-            # Converting user_groups to a list of group ids
-            group_ids = [group[0] for group in user_groups]
-            is_admin = 1 in group_ids
-            if is_admin:
+            if admin:
                 res = await main.db("SELECT id, title, author, label, created_at, start_at, end_at, post_as FROM posts WHERE author = ? AND post_type = ? LIMIT 30 OFFSET ?", (id, post_type, start_from))
             else:
                 res = await main.db("SELECT id, title, author, label, created_at, start_at, end_at, post_as FROM posts WHERE author = ? AND post_type = ? AND (permission IS NULL OR EXISTS (SELECT 1 FROM json_each(permission) WHERE value IN (?))) LIMIT 30 OFFSET ?", (id, post_type, ','.join(map(str, group_ids)), start_from))
         elif view_type == 'group' and id:
-            user_groups = await main.groups.get_user_groups(session_id)
-            # Converting user_groups to a list of group ids
-            group_ids = [group[0] for group in user_groups]
-            is_admin = 1 in group_ids
-            if is_admin:
+            if admin:
                 res = await main.db("SELECT id, title, author, label, created_at, start_at, end_at, post_as FROM posts WHERE post_as = ? AND post_type = ? LIMIT 30 OFFSET ?", (id, post_type, start_from))
             else:
                 res = await main.db("SELECT id, title, author, label, created_at, start_at, end_at, post_as FROM posts WHERE post_as = ? AND post_type = ? AND (permission IS NULL OR EXISTS (SELECT 1 FROM json_each(permission) WHERE value IN (?))) LIMIT 30 OFFSET ?", (id, post_type, ','.join(map(str, group_ids)), start_from))
@@ -102,7 +97,7 @@ async def get_details(session_id, post_id):
             group_ids = [group[0] for group in user_groups]
             post_permission = list(map(int, res[0][0].split(',')))
             # Check if the user's group is in the post's permission or if the user is an admin
-            if not any(group in post_permission for group in group_ids) and not 1 in group_ids:
+            if not any(group in post_permission for group in group_ids) and not not main.GLOBAL_ADMIN in group_ids:
                 return "Unauthorized", 401
 
         # Query the database to get all post details
@@ -146,7 +141,7 @@ async def get_pull_details(session_id, post_id):
             post_permission = list(map(int, res[0][0].split(',')))
 
             # Check if the user's group is in the pull's permission or if the user is an admin
-            if not any(group in post_permission for group in group_ids) and not 1 in group_ids:
+            if not any(group in post_permission for group in group_ids) and not main.GLOBAL_ADMIN in group_ids:
                 return "Unauthorized", 401
 
         pull_details = {
@@ -173,7 +168,7 @@ async def vote(session_id, post_id, opinion):
             group_ids = [group[0] for group in user_groups]
             post_permission = list(map(int, res[0][0].split(',')))
             # Check if the user's group is in the pull's permission or if the user is an admin
-            if not any(group in post_permission for group in group_ids) and not 1 in group_ids:
+            if not any(group in post_permission for group in group_ids) and not main.GLOBAL_ADMIN in group_ids:
                 return "Unauthorized", 401
 
         # Update the vote count based on the opinion
@@ -202,7 +197,7 @@ async def modify_post(session_id, post_id, action, title=None, content=None, lab
             group_ids = [group[0] for group in user_groups]
             post_permission = list(map(int, res[0][0].split(',')))
             # Check if the user's group is in the post's permission or if the user is an admin
-            if not any(group in post_permission for group in group_ids) and not 1 in group_ids:
+            if not any(group in post_permission for group in group_ids) and not main.GLOBAL_ADMIN in group_ids:
                 return "Unauthorized", 401
 
         # Perform the requested action
@@ -239,7 +234,7 @@ async def follow_post(session_id, post_id):
             group_ids = [group[0] for group in user_groups]
             post_permission = list(map(int, res[0][0].split(',')))
             # Check if the user's group is in the post's permission or if the user is an admin
-            if not any(group in post_permission for group in group_ids) and not 1 in group_ids:
+            if not any(group in post_permission for group in group_ids) and not main.GLOBAL_ADMIN in group_ids:
                 return "Unauthorized", 401
         # add post_id to user's following_posts(a list of post ids)
         user = await main.users.get_username_from_session(session_id)

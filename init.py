@@ -27,6 +27,7 @@ database format:
     - can_post_announcement
     - can_post_assessment
     - can_post_pull
+    - can_post_room_reservation
     - member
 - unverified_users
     - username
@@ -50,6 +51,26 @@ database format:
     - post_id
     - agree
     - disagree
+- rooms
+    - id
+    - name
+    - open_time
+    - close_time
+    - available_days
+    - status
+- reservations
+    - id
+    - room_id
+    - username
+    - for (user groups)
+    - reason
+    - start_time
+    - end_time
+    - created_at
+    - approval_status
+    - approved_by
+    - approved_at
+    - approved_reason
 '''
 
 def initialize_database():
@@ -65,7 +86,7 @@ def initialize_database():
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     bio TEXT,
                     following_posts TEXT,
-                    status INTEGER DEFAULT 0,
+                    status INTEGER DEFAULT 1,
                     FOREIGN KEY (group) REFERENCES user_groups(id)
                 )
             ''')
@@ -78,6 +99,7 @@ def initialize_database():
                     can_post_announcement TEXT NOT NULL,
                     can_post_assessment TEXT NOT NULL,
                     can_post_pull TEXT NOT NULL,
+                    can_post_room_reservation TEXT NOT NULL,
                     member TEXT NOT NULL
                 )
             ''')
@@ -112,6 +134,33 @@ def initialize_database():
                     agree INTEGER,
                     disagree INTEGER,
                     FOREIGN KEY(post_id) REFERENCES posts(id)
+                )
+            ''')
+            db.execute('''
+                CREATE TABLE rooms (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    open_time TIMESTAMP,
+                    close_time TIMESTAMP,
+                    available_days TEXT,
+                    status INTEGER DEFAULT 1
+                )
+            ''')
+            db.execute('''
+                CREATE TABLE reservations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    room_id INTEGER,
+                    username TEXT,
+                    for TEXT,
+                    reason TEXT,
+                    start_time TIMESTAMP,
+                    end_time TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    approval_status INTEGER DEFAULT 0,
+                    approved_by TEXT,
+                    FOREIGN KEY(room_id) REFERENCES rooms(id),
+                    FOREIGN KEY(username) REFERENCES users(username),
+                    FOREIGN KEY(approved_by) REFERENCES users(username)
                 )
             ''')
             db.commit()

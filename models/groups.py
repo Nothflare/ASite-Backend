@@ -10,8 +10,7 @@ async def get_user_groups(session_id, username = None):
             username = current_user
         # Check if the user is in the member list of the group with id = 1
         else:
-            is_admin = await main.db("SELECT 1 FROM user_groups WHERE id = 1 AND member LIKE ?",
-                                     ('%' + current_user + '%',))
+            is_admin = await main.users.check_if_user_is_admin(username, 'global')
             if not is_admin:
                 return "Unauthorized", 401
         # return group id and group name in json format
@@ -22,37 +21,35 @@ async def get_user_groups(session_id, username = None):
         print(f"An error occurred while fetching the user's groups: {e}")
         return "Internal Server Error", 500
 
-async def create_group(session_id, group_name, admin, not_public=0, can_post_announcement=[], can_post_assessment=[], can_post_pull=[], members=[]):
+async def create_group(session_id, group_name, admin, not_public=0, can_post_announcement=[], can_post_assessment=[], can_post_pull=[], can_post_room_reservation=[], members=[]):
     try:
         current_user = await main.users.get_username_from_session(session_id)
-        # if user in gruop id = 1's member(a list like user1,user2,user3), then user is admin
-        # Check if the user is in the member list of the group with id = 1
-        is_admin = await main.db("SELECT 1 FROM user_groups WHERE id = 1 AND member LIKE ?",
-                                 ('%' + current_user + '%',))
+        # Check if the user is admin
+        is_admin = await main.db("SELECT * FROM user_groups WHERE id = ? AND member LIKE ?", (main.GLOBAL_ADMIN, '%' + current_user + '%',))
         if not is_admin:
             return "Unauthorized", 401
 
         # Insert the new group into the database
         await main.db('''
-            INSERT INTO user_groups (name, admin, not_public, can_post_announcement, can_post_assessment, can_post_pull, member)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (group_name, admin, not_public, ','.join(can_post_announcement), ','.join(can_post_assessment), ','.join(can_post_pull), ','.join(members)))
+            INSERT INTO user_groups (name, admin, not_public, can_post_announcement, can_post_assessment, can_post_pull, can_post_room_reservation, member)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (group_name, admin, not_public, ','.join(can_post_announcement), ','.join(can_post_assessment), ','.join(can_post_pull), ','.join(can_post_room_reservation), ','.join(members)))
 
         return "Group created successfully", 201
     except Exception as e:
         print(f"An error occurred while creating the group: {e}")
         return "Internal Server Error", 500
 
-async def modify_group(session_id, group_id, action, admin=None, not_public=None, can_post_announcement=None, can_post_assessment=None, can_post_pull=None, members=None):
+async def modify_group(session_id, group_id, action, admin=None, not_public=None, can_post_announcement=None, can_post_assessment=None, can_post_pull=None, can_post_room_reservation=None, members=None):
     try:
         current_user = await main.users.get_username_from_session(session_id)
         # Check if the user is in the member list of the group with id = 1 or is admin in the current group
         is_admin = await main.db("""
-            SELECT 1 
-            FROM user_groups 
-            WHERE (id = 1 AND member LIKE ?) 
+            SELECT 1
+            FROM user_groups
+            WHERE (id = ? AND member LIKE ?)
                OR (id = ? AND admin = ?)
-        """, ('%' + current_user + '%', group_id, current_user))
+        """, (main.GLOBAL_ADMIN, '%' + current_user + '%', group_id, current_user))
         if not is_admin:
             return "Unauthorized", 401
         if action == 'delete':
@@ -163,6 +160,26 @@ async def modify_group(session_id, group_id, action, admin=None, not_public=None
             # Update the member list in the database
             await main.db("UPDATE user_groups SET can_post_pull = ? WHERE id = ?", (','.join(current_members), group_id))
             return "Member removed successfully", 200
+        elif action == 'add_can_post_room_reservation':
+            # Add a new member to the group (members is a list of usernames)
+            # Get the current member list
+            current_members = await main.db("SELECT can_post_room_reservation FROM user_groups WHERE id = ?", (group_id,))
+            # Add the new member to the list
+            current_members = current_members[0]['can_post_room_reservation'].split(',')
+            current_members.append(can_post_room_reservation)
+            # Update the member list in the database
+            await main.db("UPDATE user_groups SET can_post_room_reservation = ? WHERE id = ?", (','.join(current_members), group_id))
+            return "Member added successfully", 200
+        elif action == 'remove_can_post_room_reservation':
+            # Remove a member from the group (members is a list of usernames)
+            # Get the current member list
+            current_members = await main.db("SELECT can_post_room_reservation FROM user_groups WHERE id = ?", (group_id,))
+            # Remove the member from the list
+            current_members = current_members[0]['can_post_room_reservation'].split(',')
+            current_members.remove(can_post_room_reservation)
+            # Update the member list in the database
+            await main.db("UPDATE user_groups SET can_post_room_reservation = ? WHERE id = ?", (','.join(current_members), group_id))
+            return "Member removed successfully", 200
         else:
             return "Invalid action", 400
     except Exception as e:
@@ -241,9 +258,8 @@ async def exit_group(session_id, group_id):
 async def get_post_permissions(session_id, group_id, post_type):
     try:
         username = await main.users.get_username_from_session(session_id)
+        post_type = f'can_post_{post_type}'
         permission_list = await main.db("SELECT ? FROM user_groups WHERE id = ?", (post_type, group_id))
-        #if username in list
-        # covert permission_list to list
         permission_list = permission_list[0][0].split(',')
         if username in permission_list:
             return True

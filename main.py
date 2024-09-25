@@ -27,6 +27,9 @@ SMTP_SERVER = config['email']['smtp_server']
 SMTP_PORT = config['email']['smtp_port']
 EMAIL_USERNAME = config['email']['smtp_username']
 SMTP_USE_TLS = config['email']['smtp_use_tls']
+GLOBAL_ADMIN = config['user_groups']['global_admin']
+ROOM_ADMIN = config['user_groups']['room_admin']
+
 app.secret_key = SECRET_KEY
 
 async def db(exp, params=None):
