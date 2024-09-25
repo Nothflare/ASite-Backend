@@ -1,111 +1,88 @@
 import main
+from models.users import reset_password
+
+
 # permission in database is a list of group ids that can view the post (e.g. 1, 2, 3)
+# permission = None means everyone can view the post
+# every post must have a post_as group id
+# post_as group id must be in the permission list
+# post_as group id must be in the user's group list
+# admin can view all posts
+# admin can edit all posts
+# admin can delete all posts
+# admin can vote on all posts
+# only the author can edit or delete a post
 
-async def create_post(session_id, title, content, post_type, permission, post_as, label=None):
+async def create_post(session_id, title, content, post_type, permission, post_as, start_at = None, end_at = None, label = None):
     try:
         # Retrieve the user's group from the session
         user = await main.users.get_username_from_session(session_id)
-        user_groups = await main.db("SELECT `group` FROM users WHERE username = ?", (user,))
-
-        if not any(group[0] == post_as for group in user_groups):
-            return "Invalid 'post as' group given", 401
-
-        # Verify that the user has permission to post the specified type
-        user_group_id = post_as
-        post_type_permission_column = f"can_post_{post_type}"
-        permission_check_query = f"SELECT {post_type_permission_column} FROM user_groups WHERE id = ?"
-        permission_result = await main.db(permission_check_query, (user_group_id,))
-
-        if not permission_result or permission_result[0][0] == 0:
-            return "User does not have permission to post this type", 403
-
-        # Encode content, title, label
-        content = content.encode('utf-8')
-        title = title.encode('utf-8')
-        if label:
-            label = label.encode('utf-8')
-
-        # Encode permission into string with post_as at the front
-        permission_str = ",".join(map(str, [post_as] + sorted(permission)))
-
-        # Insert the post into the database
-        await main.db(
-            "INSERT INTO posts (title, content, author, type, label, permission, post_as) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (title, content, user, post_type, label, permission_str, post_as)
-        )
-
-        if post_type == "pull":
-            post_id = await main.db(
-                "SELECT id FROM posts WHERE title = ? AND content = ? AND author = ? AND type = ? AND label = ? AND permission = ? AND post_as = ?",
-                (title, content, user, post_type, label, permission_str, post_as)
-            )
-            await main.db("INSERT INTO pulls (post_id, agree, disagree) VALUES (?, 0, 0)", (post_id[0][0],))
-
-        return "Post created successfully", 201
-
-    except Exception as e:
-        print(f"An error occurred while creating post: {e}")
-        return "Internal Server Error", 500
-
-async def get_my_posts(session_id, start_from=0):
-    try:
-        # Retrieve the user's group from the session
-        user = await main.users.get_username_from_session(session_id)
-
-        # Query the database to get the user's posts
-        res = await main.db("SELECT id, title, author, label, created_at FROM posts WHERE author = ? LIMIT 30 OFFSET ?", (user, start_from))
-
-        # Append the posts to the list
-        posts = [{
-            "id": row[0],
-            "title": row[1],
-            "author": row[2],
-            "label": row[3],
-            "created_at": row[4]
-        } for row in res]
-
-        return {"posts": posts}, 200
-    except Exception as e:
-        print(f"An error occurred while fetching user's posts: {e}")
-        return "Internal Server Error", 500
-
-
-async def get_posts(session_id, post_type, start_from=0):
-    if post_type == "my":
-        return await get_my_posts(session_id, start_from)
-    try:
-        # Retrieve the user's group from the session
-        user = await main.users.get_username_from_session(session_id)
-        user_groups = await main.db("SELECT group FROM users WHERE username = ?", (user))
-        if not user_groups:
-            return "User group not found", 404
-
-        # Convert user_groups to a list of group ids
+        user_groups = await main.groups.get_user_groups(session_id)
+        # Converting user_groups to a list of group ids
         group_ids = [group[0] for group in user_groups]
 
-        # Check if user is admin (group id = 1)
-        if 1 in group_ids:
-            # Query the database to get posts where the type is post_type
-            res = await main.db("SELECT id, title, author, label, created_at FROM posts WHERE type = ? LIMIT 30 OFFSET ?", (post_type, start_from))
-        else:
-            # Query the database to get posts where the permission includes the user's group and type is post_type
-            placeholders = ','.join('?' for _ in group_ids)
-            query = f"""
-                SELECT id, title, author, label, created_at 
-                FROM posts 
-                WHERE type = ? 
-                AND (permission LIKE '%' || ? || '%' { ' OR permission LIKE '%' || ? || '%' ' * (len(group_ids) - 1) })
-                LIMIT 30 OFFSET ?
-            """
-            res = await main.db(query, (post_type, *group_ids, start_from))
+        # Check if post_as group id is in the user's group list
+        if post_as not in group_ids:
+            return "Unauthorized", 401
+        if not main.groups.get_post_permissions(session_id, post_as, "can_post_"+post_type):
+            return "Unauthorized", 401
+        # If permission is not None, check if post_as group id is in the permission list
+        if permission is not None:
+            permission_list = [int(group_id.strip()) for group_id in permission.split(',')]
+            if post_as not in permission_list:
+                permission_list.append(post_as)
+            # encode into list
+            permission = ",".join([str(group_id) for group_id in permission_list])
+        # Insert the post into the database
+        await main.db("""
+            INSERT INTO posts (title, content, post_type, permission, post_as, label, author, start_at, end_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (title, content, post_type, permission, post_as, label, user, start_at, end_at))
+        if post_type == "pull":
+            post_id = await main.db("SELECT id FROM posts WHERE author = ? AND created_at = (SELECT MAX(created_at) FROM posts WHERE author = ?)", (user, user))
+            await main.db("INSERT INTO pulls (post_id) VALUES (?)", (post_id[0][0],))
+        return "Post created successfully", 201
+    except Exception as e:
+        print(f"An error occurred while creating the post: {e}")
+        return "Internal Server Error", 500
 
-        # Append the posts to the list
+async def get_posts(session_id, post_type, start_from=0, view_type='public', id=None):
+    try:
+        if view_type == 'public':
+            res = await main.db("SELECT id, title, author, label, created_at, start_at, end_at, post_as FROM posts WHERE post_type = ? AND permission IS NULL LIMIT 30 OFFSET ?", (post_type, start_from))
+        elif view_type == 'my':
+            user = await main.users.get_username_from_session(session_id)
+            res = await main.db("SELECT id, title, author, label, created_at, start_at, end_at, post_as FROM posts WHERE author = ? AND post_type = ? LIMIT 30 OFFSET ?", (user, post_type, start_from))
+        elif view_type == 'user' and id:
+            user_groups = await main.groups.get_user_groups(session_id)
+            # Converting user_groups to a list of group ids
+            group_ids = [group[0] for group in user_groups]
+            is_admin = 1 in group_ids
+            if is_admin:
+                res = await main.db("SELECT id, title, author, label, created_at, start_at, end_at, post_as FROM posts WHERE author = ? AND post_type = ? LIMIT 30 OFFSET ?", (id, post_type, start_from))
+            else:
+                res = await main.db("SELECT id, title, author, label, created_at, start_at, end_at, post_as FROM posts WHERE author = ? AND post_type = ? AND (permission IS NULL OR EXISTS (SELECT 1 FROM json_each(permission) WHERE value IN (?))) LIMIT 30 OFFSET ?", (id, post_type, ','.join(map(str, group_ids)), start_from))
+        elif view_type == 'group' and id:
+            user_groups = await main.groups.get_user_groups(session_id)
+            # Converting user_groups to a list of group ids
+            group_ids = [group[0] for group in user_groups]
+            is_admin = 1 in group_ids
+            if is_admin:
+                res = await main.db("SELECT id, title, author, label, created_at, start_at, end_at, post_as FROM posts WHERE post_as = ? AND post_type = ? LIMIT 30 OFFSET ?", (id, post_type, start_from))
+            else:
+                res = await main.db("SELECT id, title, author, label, created_at, start_at, end_at, post_as FROM posts WHERE post_as = ? AND post_type = ? AND (permission IS NULL OR EXISTS (SELECT 1 FROM json_each(permission) WHERE value IN (?))) LIMIT 30 OFFSET ?", (id, post_type, ','.join(map(str, group_ids)), start_from))
+        else:
+            return "Invalid view type or missing id", 400
+
         posts = [{
             "id": row[0],
             "title": row[1],
             "author": row[2],
             "label": row[3],
-            "created_at": row[4]
+            "created_at": row[4],
+            "start_at": row[5],
+            "end_at": row[6],
+            "post_as": row[7]
         } for row in res]
 
         return {"posts": posts}, 200
@@ -115,97 +92,89 @@ async def get_posts(session_id, post_type, start_from=0):
 
 async def get_details(session_id, post_id):
     try:
-        # Retrieve the user's group from the session
-        user = await main.users.get_username_from_session(session_id)
-        user_groups = await main.db("SELECT `group` FROM users WHERE username = ?", (user,))
-        if not user_groups:
-            return "User group not found", 404
-
-        # Convert user_groups to a list of group ids
-        group_ids = [group[0] for group in user_groups]
-
-        # Query the database to get the post
-        res = await main.db("SELECT id, title, author, label, created_at, content, permission, post_as FROM posts WHERE id = ?", (post_id,))
-        if not res:
-            return "Post not found", 404
-
-        post = res[0]
-        post_permission = list(map(int, post[6].split(',')))
-
-        # Check if the user's group is in the post's permission or if the user is an admin
-        if not any(group in post_permission for group in group_ids) and not 1 in group_ids:
-            return "Unauthorized", 401
-
-        # Return the post details
-        return {
-            "id": post[0],
-            "title": post[1],
-            "author": post[2],
-            "label": post[3],
-            "created_at": post[4],
-            "content": post[5]
-        }, 200
-    except Exception as e:
-        print(f"An error occurred while fetching post details: {e}")
-        return "Internal Server Error", 500
-
-async def get_pull_details(session_id, post_id):
-    try:
-        # Retrieve the user's group from the session
-        user = await main.users.get_username_from_session(session_id)
-        user_groups = await main.db("SELECT `group` FROM users WHERE username = ?", (user,))
-        if not user_groups:
-            return "User group not found", 404
-
-        # Convert user_groups to a list of group ids
-        group_ids = [group[0] for group in user_groups]
-
         # Query the database to get the post's permission
         res = await main.db("SELECT permission FROM posts WHERE id = ?", (post_id,))
         if not res:
             return "Post not found", 404
+        if not res[0][0] is None:
+            user_groups = await main.groups.get_user_groups(session_id)
+            # Converting user_groups to a list of group ids
+            group_ids = [group[0] for group in user_groups]
+            post_permission = list(map(int, res[0][0].split(',')))
+            # Check if the user's group is in the post's permission or if the user is an admin
+            if not any(group in post_permission for group in group_ids) and not 1 in group_ids:
+                return "Unauthorized", 401
 
-        post_permission = list(map(int, res[0][0].split(',')))
-
-        # Check if the user's group is in the post's permission or if the user is an admin
-        if not any(group in post_permission for group in group_ids) and not 1 in group_ids:
-            return "Unauthorized", 401
-
-        # Query the database to get the pull details
-        res = await main.db("SELECT agree, disagree FROM pulls WHERE post_id = ?", (post_id,))
+        # Query the database to get all post details
+        res = await main.db("SELECT * FROM posts WHERE id = ?", (post_id,))
         if not res:
-            return "Pull not found", 404
+            return "Post not found", 404
 
-        # Return the pull details
-        return {
-            "agree": res[0][0],
-            "disagree": res[0][1]
-        }, 200
+        # Assuming the columns are known and fixed, map them to a dictionary
+        post_details = {
+            "id": res[0][0],
+            "title": res[0][1],
+            "author": res[0][2],
+            "label": res[0][3],
+            "created_at": res[0][4],
+            "start_at": res[0][5],
+            "end_at": res[0][6],
+            "post_as": res[0][7],
+            "content": res[0][8],
+            "permission": res[0][9]
+            # Add other columns as needed
+        }
+
+        return post_details, 200
+    except Exception as e:
+        print(f"An error occurred while fetching post details: {e}")
+        return "Internal Server Error", 500
+
+
+async def get_pull_details(session_id, post_id):
+    try:
+        # Query the database to get the pull's permission, agree, and disagree counts
+        res = await main.db("SELECT permission, agree, disagree FROM pulls WHERE post_id = ?", (post_id,))
+        if not res:
+            return "Post not found", 404
+
+        # Check if the pull has specific permissions
+        if res[0][0] is not None:
+            user_groups = await main.groups.get_user_groups(session_id)
+            # Converting user_groups to a list of group ids
+            group_ids = [group[0] for group in user_groups]
+            post_permission = list(map(int, res[0][0].split(',')))
+
+            # Check if the user's group is in the pull's permission or if the user is an admin
+            if not any(group in post_permission for group in group_ids) and not 1 in group_ids:
+                return "Unauthorized", 401
+
+        pull_details = {
+            "agree": res[0][1],
+            "disagree": res[0][2]
+        }
+
+        return pull_details, 200
     except Exception as e:
         print(f"An error occurred while fetching pull details: {e}")
         return "Internal Server Error", 500
 
 async def vote(session_id, post_id, opinion):
     try:
-        # Retrieve the user's group from the session
-        user = await main.users.get_username_from_session(session_id)
-        user_groups = await main.db("SELECT `group` FROM users WHERE username = ?", (user,))
-        if not user_groups:
-            return "User group not found", 404
-
-        # Convert user_groups to a list of group ids
-        group_ids = [group[0] for group in user_groups]
-
-        # Query the database to get the post's permission
-        res = await main.db("SELECT permission FROM posts WHERE id = ?", (post_id,))
+        # Query the database to get the pull's permission
+        res = await main.db("SELECT permission FROM pulls WHERE post_id = ?", (post_id,))
         if not res:
             return "Post not found", 404
 
-        post_permission = list(map(int, res[0][0].split(',')))
-
-        # Check if the user's group is in the post's permission or if the user is an admin
-        if not any(group in post_permission for group in group_ids) and not 1 in group_ids:
-            return "Unauthorized", 401
+        # Check if the pull has specific permissions
+        if res[0][0] is not None:
+            user_groups = await main.groups.get_user_groups(session_id)
+            # Converting user_groups to a list of group ids
+            group_ids = [group[0] for group in user_groups]
+            post_permission = list(map(int, res[0][0].split(',')))
+            # Check if the user's group is in the pull's permission or if the user is an admin
+            if not any(group in post_permission for group in group_ids) and not 1 in group_ids:
+                return "Unauthorized", 401
 
         # Update the vote count based on the opinion
         if opinion == "agree":
@@ -223,20 +192,18 @@ async def vote(session_id, post_id, opinion):
 
 async def modify_post(session_id, post_id, action, title=None, content=None, label=None, permission=None):
     try:
-        # Retrieve the user's group from the session
-        user = await main.users.get_username_from_session(session_id)
-        user_groups = await main.db("SELECT `group` FROM users WHERE username = ?", (user,))
-        if not user_groups:
-            return "User group not found", 404
-
-        # Query the database to get the post's author
-        res = await main.db("SELECT author FROM posts WHERE id = ?", (post_id,))
+        # Query the database to get the post's permission
+        res = await main.db("SELECT permission FROM posts WHERE id = ?", (post_id,))
         if not res:
             return "Post not found", 404
-
-        # Check if the user is the author
-        if user != res[0][0]:
-            return "Unauthorized", 401
+        if not res[0][0] is None:
+            user_groups = await main.groups.get_user_groups(session_id)
+            # Converting user_groups to a list of group ids
+            group_ids = [group[0] for group in user_groups]
+            post_permission = list(map(int, res[0][0].split(',')))
+            # Check if the user's group is in the post's permission or if the user is an admin
+            if not any(group in post_permission for group in group_ids) and not 1 in group_ids:
+                return "Unauthorized", 401
 
         # Perform the requested action
         if action == "edit":
@@ -260,3 +227,55 @@ async def modify_post(session_id, post_id, action, title=None, content=None, lab
         print(f"An error occurred while modifying the post: {e}")
         return "Internal Server Error", 500
 
+async def follow_post(session_id, post_id):
+    try:
+        # Query the database to get the post's permission
+        res = await main.db("SELECT permission FROM posts WHERE id = ?", (post_id,))
+        if not res:
+            return "Post not found", 404
+        if not res[0][0] is None:
+            user_groups = await main.groups.get_user_groups(session_id)
+            # Converting user_groups to a list of group ids
+            group_ids = [group[0] for group in user_groups]
+            post_permission = list(map(int, res[0][0].split(',')))
+            # Check if the user's group is in the post's permission or if the user is an admin
+            if not any(group in post_permission for group in group_ids) and not 1 in group_ids:
+                return "Unauthorized", 401
+        # add post_id to user's following_posts(a list of post ids)
+        user = await main.users.get_username_from_session(session_id)
+        # check if post_id is already in following_posts
+        following_posts = await main.db("SELECT following_posts FROM users WHERE username = ?", (user,))
+        following_posts = following_posts[0][0]
+        if post_id in following_posts:
+            return "Post already followed", 200
+        following_posts.append(post_id)
+        following_posts = ",".join([str(post_id) for post_id in following_posts])
+        await main.db("UPDATE users SET following_posts = ? WHERE username = ?", (following_posts, user))
+        return "Post followed successfully", 200
+    except Exception as e:
+        print(f"An error occurred while fetching post details: {e}")
+        return "Internal Server Error", 500
+
+async def get_timeline(session_id):
+    # return all start and stop time that in user's following_posts (announcements and assessments)
+    try:
+        user = await main.users.get_username_from_session(session_id)
+        following_posts = await main.db("SELECT following_posts FROM users WHERE username = ?", (user,))
+        following_posts = following_posts[0][0]
+        if not following_posts:
+            return "No posts found", 404
+        res = await main.db("SELECT id, title, label, start_at, end_at, post_as FROM posts WHERE id IN (?)", (following_posts,))
+        if not res:
+            return "No posts found", 404
+        posts = [{
+            "id": row[0],
+            "title": row[1],
+            "created_at": row[2],
+            "start_at": row[3],
+            "end_at": row[4],
+            "post_as": row[5]
+        } for row in res]
+        return {"posts": posts}, 200
+    except Exception as e:
+        print(f"An error occurred while fetching posts: {e}")
+        return "Internal Server Error", 500

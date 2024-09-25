@@ -1,33 +1,15 @@
 import aiohttp
-import aiosmtplib
 import configparser
 from itsdangerous import URLSafeTimedSerializer
-from werkzeug.security import generate_password_hash, check_password_hash
 import main
 
 config = configparser.ConfigParser()
 config.read('config.conf')
 
 # EMAIL = config['email']['email']
-PASSWORD = config['email']['smtp_password']
-SMTP_SERVER = config['email']['smtp_server']
-SMTP_PORT = config['email']['smtp_port']
-EMAIL_USERNAME = config['email']['smtp_username']
-SMTP_USE_TLS = config['email']['smtp_use_tls']
+
 SECRET_KEY = config['app']['secret_key']
 SECURITY_PASSWORD_SALT =  config['app']['security_password_salt']
-
-async def send_email(email, subject, message):
-    try:
-        async with aiosmtplib.SMTP(hostname=SMTP_SERVER, port=SMTP_PORT) as smtp:
-            await smtp.connect()
-            await smtp.starttls()
-            await smtp.login(EMAIL_USERNAME, PASSWORD)
-            message = f"Subject: {subject}\n\n{message}"
-            await smtp.sendmail(EMAIL_USERNAME, email, message)
-            await smtp.quit()
-    except aiosmtplib.SMTPException as e:
-        raise
 
 async def generate_confirmation_token(email):
     serializer = URLSafeTimedSerializer(SECRET_KEY)
@@ -50,7 +32,7 @@ async def send_confirmation_email(email):
     confirm_url = main.url_for('confirm_email', token=token, _external=True)
     html = f'Please click the link to confirm your email: <a href="{confirm_url}">{confirm_url}</a>'
     subject = "Please confirm your email"
-    return await send_email(email, subject, html)
+    return await main.send_email(email, subject, html)
 
 async def confirm_email(token):
     email = await confirm_token(token)

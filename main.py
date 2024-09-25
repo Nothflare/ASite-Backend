@@ -4,8 +4,9 @@ from flask import Flask, jsonify, request, make_response, session, url_for, sess
 from flask_cors import CORS
 import json
 import asyncio
-from models import dash, posts, users, auth
+from models import dash, posts, users, auth, groups
 import secrets
+import aiosmtplib
 import aiosqlite
 import configparser
 
@@ -21,6 +22,11 @@ config.read('config.conf')
 DATABASE_PATH = config['database']['path']
 SECRET_KEY = config['app']['secret_key']
 BACKEND_VERSION = config['app']['version']
+SMTP_PASSWORD = config['email']['smtp_password']
+SMTP_SERVER = config['email']['smtp_server']
+SMTP_PORT = config['email']['smtp_port']
+EMAIL_USERNAME = config['email']['smtp_username']
+SMTP_USE_TLS = config['email']['smtp_use_tls']
 app.secret_key = SECRET_KEY
 
 async def db(exp, params=None):
@@ -38,6 +44,18 @@ async def db(exp, params=None):
                     await conn.commit()
     except Exception as e:
         print(f"An error occurred: {e}")
+
+async def send_email(email, subject, message):
+    try:
+        async with aiosmtplib.SMTP(hostname=SMTP_SERVER, port=SMTP_PORT) as smtp:
+            await smtp.connect()
+            await smtp.starttls()
+            await smtp.login(EMAIL_USERNAME, SMTP_PASSWORD)
+            message = f"Subject: {subject}\n\n{message}"
+            await smtp.sendmail(EMAIL_USERNAME, email, message)
+            await smtp.quit()
+    except aiosmtplib.SMTPException as e:
+        raise
 
 def login_required(f):
     @wraps(f)

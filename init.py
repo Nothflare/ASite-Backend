@@ -14,18 +14,20 @@ database format:
     - username
     - password
     - email
-    - group
     - created_at
     - updated_at
     - bio
+    - following_posts
     - status
 - user_groups
     - id
     - name
+    - admin
+    - not_public (0 or 1) - 0 means public(default), 1 means private
     - can_post_announcement
     - can_post_assessment
     - can_post_pull
-    - can_comment
+    - member
 - unverified_users
     - username
     - password
@@ -39,7 +41,9 @@ database format:
     - type
     - label
     - permission
-    - ownership
+    - post_as
+    - start_at
+    - end_at
     - created_at
     - updated_at
 -pulls
@@ -57,10 +61,10 @@ def initialize_database():
                     username TEXT NOT NULL UNIQUE,
                     password TEXT NOT NULL,
                     email TEXT NOT NULL UNIQUE,
-                    group INTEGER,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     bio TEXT,
+                    following_posts TEXT,
                     status INTEGER DEFAULT 0,
                     FOREIGN KEY (group) REFERENCES user_groups(id)
                 )
@@ -68,12 +72,13 @@ def initialize_database():
             db.execute('''
                 CREATE TABLE user_groups (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL UNIQUE
-                    can_post_announcement INTEGER DEFAULT 0,
-                    can_post_assessment INTEGER DEFAULT 0,
-                    can_post_pull INTEGER DEFAULT 0,
-                    can_comment INTEGER DEFAULT 0
-                    
+                    name TEXT NOT NULL UNIQUE,
+                    admin TEXT NOT NULL,
+                    not_public INTEGER DEFAULT 0,
+                    can_post_announcement TEXT NOT NULL,
+                    can_post_assessment TEXT NOT NULL,
+                    can_post_pull TEXT NOT NULL,
+                    member TEXT NOT NULL
                 )
             ''')
             db.execute('''
@@ -92,7 +97,10 @@ def initialize_database():
                     author INTEGER,
                     type TEXT NOT NULL,
                     label TEXT NOT NULL,
-                    permission TEXT NOT NULL,
+                    permission TEXT,
+                    post_as TEXT NOT NULL,
+                    start_at TIMESTAMP,
+                    end_at TIMESTAMP,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY(author) REFERENCES users(id)

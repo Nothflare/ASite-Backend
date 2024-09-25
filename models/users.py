@@ -5,6 +5,14 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 #ststus: 0=inactive, 1=active
 
+async def get_username_from_session(session_id):
+    return main.session[session_id]
+
+async def get_user_email_from_session(session_id):
+    username = await get_username_from_session(session_id)
+    res = await main.db("SELECT email FROM users WHERE username = ?", (username,))
+    return res[0][0]
+
 async def signup(username, password, email):
     if not re.match(r"^[a-zA-Z0-9_]+$", username):
         return "Invalid username format", 400
@@ -70,30 +78,54 @@ async def logout(session_id):
         return "Internal Server Error", 500
 
 
-async def get_username_from_session(session_id):
-    return main.session[session_id]
-
-
 async def modify_user(session_id, target_user_email, action, password=None, bio=None):
     try:
         current_user = await get_username_from_session(session_id)
-        is_admin = await main.db("SELECT * FROM user_groups WHERE id = (SELECT `group` FROM users WHERE username = ?) AND name = 'admin'", (current_user,))
+        is_admin = await main.db("SELECT * FROM user_groups WHERE id = (SELECT `group` FROM users WHERE username = %s) AND name = 'admin'", (current_user,))
 
         if password:
             password_hash = generate_password_hash(password)
-            await main.db("UPDATE users SET password = ? WHERE username = ?", (password_hash, target_user))
+            await main.db("UPDATE users SET password = %s WHERE email = %s", (password_hash, target_user_email))
 
         if bio:
-            await main.db("UPDATE users SET bio = ? WHERE username = ?", (bio, target_user))
+            await main.db("UPDATE users SET bio = %s WHERE email = %s", (bio, target_user_email))
 
         if action == 'delete' and is_admin:
-            await main.db("DELETE FROM users WHERE username = ?", (target_user,))
+            await main.db("DELETE FROM users WHERE email = %s", (target_user_email,))
 
         if action == 'deactivate' and is_admin:
-            await main.db("UPDATE users SET login_status = 0 WHERE username = ?", (target_user,))
+            await main.db("UPDATE users SET login_status = 0 WHERE email = %s", (target_user_email,))
 
         return "User modified successfully", 200
 
     except Exception as e:
-        print(f"An error occurred while modifying the user: {e}")
+        return "Internal Server Error", 500
+
+async def forget_password(email):
+    try:
+        res = await main.db("SELECT * FROM users WHERE email = ?", (email,))
+        if len(res) == 0:
+            return "User not found", 404
+        else:
+            token = await main.auth.generate_confirmation_token(email)
+            reset_url = main.url_for('reset_password', token=token, _external=True)
+            html = f'Please click the link to reset your password: <a href="{reset_url}">{reset_url}</a>'
+            subject = "Password Reset"
+            await main.send_email(email, subject, html)
+            return "Password reset email sent", 200
+
+    except Exception as e:
+        print(f"An error occurred during password reset: {e}")
+        return "Internal Server Error", 500
+
+async def reset_password(token, password):
+    try:
+        email = await main.auth.confirm_token(token)
+        if not email:
+            return 'The reset link is invalid or has expired.', 400
+        password_hash = generate_password_hash(password)
+        await main.db("UPDATE users SET password = %s WHERE email = %s", (password_hash, email))
+        return 'Password reset successfully', 200
+    except Exception as e:
+        print(f"An error occurred during password reset: {e}")
         return "Internal Server Error", 500
