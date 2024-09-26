@@ -32,6 +32,8 @@ async def check_if_user_is_admin(username, type):
 async def signup(username, password, email):
     if not re.match(r"^[a-zA-Z0-9_]+$", username):
         return "Invalid username format", 400
+    if len(username) < 4 or len(username) > 20:
+        return "Username must be between 4 and 20 characters", 400
     if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
         return "Invalid email format", 400
     try:
@@ -101,11 +103,8 @@ async def modify_user(session_id, target_username, action, password=None, bio=No
         if not username:
             return 'Unauthorized', 401
         if admin:
-            user_groups = await main.groups.get_user_groups(session_id)
-            user_groups = user_groups[0]
-            # '[{"id": 1, "name": "admin"}]'
-            group_ids = [group['id'] for group in user_groups]
-            if not 1 in group_ids:
+            is_admin = await main.users.check_if_user_is_admin(username, 'global')
+            if not is_admin:
                 return 'Forbidden', 403
         elif not username or username != target_username:
             return 'Unauthorized', 401

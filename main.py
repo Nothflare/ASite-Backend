@@ -180,17 +180,12 @@ async def modify_group():
     except json.JSONDecodeError:
         return jsonify({'error': 'Invalid JSON payload'}), 400
     session_id = request.cookies.get('session_id')
-    group_name = data.get('group_name')
+    group_id = data.get('group_id')
     action = data.get('action')
-    admin = data.get('admin')
-    not_public = data.get('not_public')
-    can_post_announcements = data.get('can_post_announcements')
-    can_post_assessment = data.get('can_post_assessment')
-    can_post_pull = data.get('can_post_pull')
-    can_post_room_reservation = data.get('can_post_room_reservation')
-    members = data.get('members')
+    subject = data.get('subject')
+    #
     try:
-        msg, code = await groups.modify_group(session_id, group_name, action, admin, not_public, can_post_announcements, can_post_assessment, can_post_pull, can_post_room_reservation, members)
+        msg, code = await groups.modify_group(session_id, group_id, action, subject)
         return jsonify({'message': msg}), code
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -199,7 +194,9 @@ async def modify_group():
 async def get_public_groups():
     try:
         session_id = request.cookies.get('session_id')
-        return await groups.get_public_group_list(session_id)
+        msg, code = await groups.get_public_group_list(session_id)
+        # await main.db("SELECT id, name FROM user_groups WHERE not_public = 0")
+        return jsonify({'message': msg}), code
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 @app.route('/join_public_group', methods=['POST'])
@@ -207,11 +204,11 @@ async def join_public_group():
     try:
         data = json.loads(request.data)
         session_id = request.cookies.get('session_id')
-        group_name = data.get('group_name')
+        group_id = data.get('group_id')
     except json.JSONDecodeError:
         return jsonify({'error': 'Invalid JSON payload'}), 400
     try:
-        msg, code = await groups.join_public_group(session_id, group_name)
+        msg, code = await groups.join_public_group(session_id, group_id)
         return jsonify({'message': msg}), code
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -221,11 +218,11 @@ async def leave_group():
     try:
         data = json.loads(request.data)
         session_id = request.cookies.get('session_id')
-        group_name = data.get('group_name')
+        group_id = data.get('group_id')
     except json.JSONDecodeError:
         return jsonify({'error': 'Invalid JSON payload'}), 400
     try:
-        msg, code = await groups.leave_group(session_id, group_name)
+        msg, code = await groups.leave_group(session_id, group_id)
         return jsonify({'message': msg}), code
     except Exception as e:
         return jsonify({'error': str(e)}), 500

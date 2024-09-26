@@ -1,3 +1,5 @@
+from idlelib.mainmenu import menudefs
+
 import main
 
 # group_admin, can_post_announcement is a list of usernames
@@ -27,11 +29,33 @@ async def get_user_groups(session_id, username = None):
         print(f"An error occurred while fetching the user's groups: {e}")
         return "Internal Server Error", 500
 
-async def create_group(session_id, group_name, admin, not_public=0, can_post_announcement=[], can_post_assessment=[], can_post_pull=[], can_post_room_reservation=[], members=[]):
+async def create_group(session_id, group_name, admin, not_public = 0, can_post_announcement=None, can_post_assessment=None, can_post_pull=None, can_post_room_reservation=None, members=None):
     try:
+        if not group_name:
+            return "Group name is required", 400
+        else:
+            group_name = group_name.encode('utf-8')
+            if len(group_name) > 50:
+                return "Group name is too long", 400
+        if not admin:
+            return "Admin is required", 400
+        if not not_public:
+            not_public = 0
+        if not can_post_announcement:
+            can_post_announcement = []
+        if not can_post_assessment:
+            can_post_assessment = []
+        if not can_post_pull:
+            can_post_pull = []
+        if not can_post_room_reservation:
+            can_post_room_reservation = []
+        if not members:
+            members = []
+        for permission in [can_post_announcement, can_post_assessment, can_post_pull, can_post_room_reservation, members]:
+            if not isinstance(permission, list):
+                return "Invalid permission list", 400
         current_user = await main.users.get_username_from_session(session_id)
-        # Check if the user is admin
-        is_admin = await main.db("SELECT * FROM user_groups WHERE id = ? AND member LIKE ?", (main.GLOBAL_ADMIN, '%' + current_user + '%',))
+        is_admin = await main.users.check_if_user_is_admin(current_user, 'global')
         if not is_admin:
             return "Unauthorized", 401
         # Check if admin is in the member list
@@ -49,144 +73,156 @@ async def create_group(session_id, group_name, admin, not_public=0, can_post_ann
         print(f"An error occurred while creating the group: {e}")
         return "Internal Server Error", 500
 
-async def modify_group(session_id, group_id, action, admin=None, not_public=None, can_post_announcement=None, can_post_assessment=None, can_post_pull=None, can_post_room_reservation=None, members=None):
+async def modify_group(session_id, group_id, action, subject):
     try:
+        if not group_id:
+            return "Group id is required", 400
+        if not action:
+            return "Action is required", 400
         current_user = await main.users.get_username_from_session(session_id)
         # Check if the user is in the member list of the group with id = 1 or is admin in the current group
-        is_admin = await main.db("""
-            SELECT 1
-            FROM user_groups
-            WHERE (id = ? AND member LIKE ?)
-               OR (id = ? AND admin = ?)
-        """, (main.GLOBAL_ADMIN, '%' + current_user + '%', group_id, current_user))
+        is_admin = await main.users.check_if_user_is_admin(current_user, 'global')
         if not is_admin:
-            return "Unauthorized", 401
+            is_admin = await main.db("SELECT 1 FROM user_groups WHERE id = ? AND admin LIKE ?", (group_id, '%' + current_user + '%',))
+            if not is_admin:
+                return "Unauthorized", 401
         if action == 'delete':
             # Delete the group from the database
             await main.db("DELETE FROM user_groups WHERE id = ?", (group_id,))
             return "Group deleted successfully", 200
         elif action == 'visibility':
-            # Update the visibility of the group
-            await main.db("UPDATE user_groups SET not_public = ? WHERE id = ?", (not_public, group_id))
-            return "Group visibility updated successfully", 200
+            # Reverse the visibility of the group
+            current_visibility = await main.db("SELECT not_public FROM user_groups WHERE id = ?", (group_id,))
+            current_visibility = current_visibility[0][0]
+            await main.db("UPDATE user_groups SET not_public = ? WHERE id = ?", (1 - current_visibility, group_id))
+            return "Visibility changed successfully", 200
+        elif action == 'change_name':
+            if not subject or not isinstance(subject, str):
+                return "Invalid group name", 400
+            # encode the group name
+            subject = subject.encode('utf-8')
+            if len(subject) > 50:
+                return "Group name is too long", 400
+            await main.db("UPDATE user_groups SET name = ? WHERE id = ?", (subject, group_id))
+            return "Group name changed successfully", 200
         elif action == 'add_admin':
-            # Add a new admin to the group (admin is a list of usernames)
-            # Get the current admin list
+            if not subject or not isinstance(subject, list):
+                return "Invalid admin", 400
             current_admin = await main.db("SELECT admin FROM user_groups WHERE id = ?", (group_id,))
-            # Add the new admin to the list
-            current_admin = current_admin[0]['admin'].split(',')
-            current_admin.append(admin)
-            # Update the admin list in the database
+            current_admin = current_admin[0][0].split(',')
+            for admin in subject:
+                if admin not in current_admin:
+                    current_admin.append(admin)
             await main.db("UPDATE user_groups SET admin = ? WHERE id = ?", (','.join(current_admin), group_id))
             return "Admin added successfully", 200
         elif action == 'remove_admin':
-            # Remove an admin from the group (admin is a list of usernames)
-            # Get the current admin list
+            if not subject or not isinstance(subject, list):
+                return "Invalid admin", 400
             current_admin = await main.db("SELECT admin FROM user_groups WHERE id = ?", (group_id,))
-            # Remove the admin from the list
-            current_admin = current_admin[0]['admin'].split(',')
-            current_admin.remove(admin)
-            # Update the admin list in the database
+            current_admin = current_admin[0][0].split(',')
+            for admin in subject:
+                if admin in current_admin:
+                    current_admin.remove(admin)
             await main.db("UPDATE user_groups SET admin = ? WHERE id = ?", (','.join(current_admin), group_id))
             return "Admin removed successfully", 200
         elif action == 'add_member':
-            # Add a new member to the group (members is a list of usernames)
-            # Get the current member list
+            if not subject or not isinstance(subject, list):
+                return "Invalid member", 400
             current_members = await main.db("SELECT member FROM user_groups WHERE id = ?", (group_id,))
-            # Add the new member to the list
-            current_members = current_members[0]['member'].split(',')
-            current_members.append(members)
-            # Update the member list in the database
+            current_members = current_members[0][0].split(',')
+            for member in subject:
+                if member not in current_members:
+                    current_members.append(member)
             await main.db("UPDATE user_groups SET member = ? WHERE id = ?", (','.join(current_members), group_id))
             return "Member added successfully", 200
         elif action == 'remove_member':
-            # Remove a member from the group (members is a list of usernames)
-            # Get the current member list
+            if not subject or not isinstance(subject, list):
+                return "Invalid member", 400
             current_members = await main.db("SELECT member FROM user_groups WHERE id = ?", (group_id,))
-            # Remove the member from the list
-            current_members = current_members[0]['member'].split(',')
-            current_members.remove(members)
-            # Update the member list in the database
+            current_members = current_members[0][0].split(',')
+            for member in subject:
+                if member in current_members:
+                    current_members.remove(member)
             await main.db("UPDATE user_groups SET member = ? WHERE id = ?", (','.join(current_members), group_id))
             return "Member removed successfully", 200
         elif action == 'add_can_post_announcement':
-            # Add a new member to the group (members is a list of usernames)
-            # Get the current member list
+            if not subject or not isinstance(subject, list):
+                return "Invalid user", 400
             current_members = await main.db("SELECT can_post_announcement FROM user_groups WHERE id = ?", (group_id,))
-            # Add the new member to the list
-            current_members = current_members[0]['can_post_announcement'].split(',')
-            current_members.append(can_post_announcement)
-            # Update the member list in the database
+            current_members = current_members[0][0].split(',')
+            for member in subject:
+                if member not in current_members:
+                    current_members.append(member)
             await main.db("UPDATE user_groups SET can_post_announcement = ? WHERE id = ?", (','.join(current_members), group_id))
             return "Member added successfully", 200
         elif action == 'remove_can_post_announcement':
-            # Remove a member from the group (members is a list of usernames)
-            # Get the current member list
+            if not subject or not isinstance(subject, list):
+                return "Invalid user", 400
             current_members = await main.db("SELECT can_post_announcement FROM user_groups WHERE id = ?", (group_id,))
-            # Remove the member from the list
-            current_members = current_members[0]['can_post_announcement'].split(',')
-            current_members.remove(can_post_announcement)
-            # Update the member list in the database
+            current_members = current_members[0][0].split(',')
+            for member in subject:
+                if member in current_members:
+                    current_members.remove(member)
             await main.db("UPDATE user_groups SET can_post_announcement = ? WHERE id = ?", (','.join(current_members), group_id))
             return "Member removed successfully", 200
         elif action == 'add_can_post_assessment':
-            # Add a new member to the group (members is a list of usernames)
-            # Get the current member list
+            if not subject or not isinstance(subject, list):
+                return "Invalid user", 400
             current_members = await main.db("SELECT can_post_assessment FROM user_groups WHERE id = ?", (group_id,))
-            # Add the new member to the list
-            current_members = current_members[0]['can_post_assessment'].split(',')
-            current_members.append(can_post_assessment)
-            # Update the member list in the database
+            current_members = current_members[0][0].split(',')
+            for member in subject:
+                if member not in current_members:
+                    current_members.append(member)
             await main.db("UPDATE user_groups SET can_post_assessment = ? WHERE id = ?", (','.join(current_members), group_id))
             return "Member added successfully", 200
         elif action == 'remove_can_post_assessment':
-            # Remove a member from the group (members is a list of usernames)
-            # Get the current member list
+            if not subject or not isinstance(subject, list):
+                return "Invalid user", 400
             current_members = await main.db("SELECT can_post_assessment FROM user_groups WHERE id = ?", (group_id,))
-            # Remove the member from the list
-            current_members = current_members[0]['can_post_assessment'].split(',')
-            current_members.remove(can_post_assessment)
-            # Update the member list in the database
+            current_members = current_members[0][0].split(',')
+            for member in subject:
+                if member in current_members:
+                    current_members.remove(member)
             await main.db("UPDATE user_groups SET can_post_assessment = ? WHERE id = ?", (','.join(current_members), group_id))
             return "Member removed successfully", 200
         elif action == 'add_can_post_pull':
-            # Add a new member to the group (members is a list of usernames)
-            # Get the current member list
+            if not subject or not isinstance(subject, list):
+                return "Invalid user", 400
             current_members = await main.db("SELECT can_post_pull FROM user_groups WHERE id = ?", (group_id,))
-            # Add the new member to the list
-            current_members = current_members[0]['can_post_pull'].split(',')
-            current_members.append(can_post_pull)
-            # Update the member list in the database
+            current_members = current_members[0][0].split(',')
+            for member in subject:
+                if member not in current_members:
+                    current_members.append(member)
             await main.db("UPDATE user_groups SET can_post_pull = ? WHERE id = ?", (','.join(current_members), group_id))
             return "Member added successfully", 200
         elif action == 'remove_can_post_pull':
-            # Remove a member from the group (members is a list of usernames)
-            # Get the current member list
+            if not subject or not isinstance(subject, list):
+                return "Invalid user", 400
             current_members = await main.db("SELECT can_post_pull FROM user_groups WHERE id = ?", (group_id,))
-            # Remove the member from the list
-            current_members = current_members[0]['can_post_pull'].split(',')
-            current_members.remove(can_post_pull)
-            # Update the member list in the database
+            current_members = current_members[0][0].split(',')
+            for member in subject:
+                if member in current_members:
+                    current_members.remove(member)
             await main.db("UPDATE user_groups SET can_post_pull = ? WHERE id = ?", (','.join(current_members), group_id))
             return "Member removed successfully", 200
         elif action == 'add_can_post_room_reservation':
-            # Add a new member to the group (members is a list of usernames)
-            # Get the current member list
+            if not subject or not isinstance(subject, list):
+                return "Invalid user", 400
             current_members = await main.db("SELECT can_post_room_reservation FROM user_groups WHERE id = ?", (group_id,))
-            # Add the new member to the list
-            current_members = current_members[0]['can_post_room_reservation'].split(',')
-            current_members.append(can_post_room_reservation)
-            # Update the member list in the database
+            current_members = current_members[0][0].split(',')
+            for member in subject:
+                if member not in current_members:
+                    current_members.append(member)
             await main.db("UPDATE user_groups SET can_post_room_reservation = ? WHERE id = ?", (','.join(current_members), group_id))
             return "Member added successfully", 200
         elif action == 'remove_can_post_room_reservation':
-            # Remove a member from the group (members is a list of usernames)
-            # Get the current member list
+            if not subject or not isinstance(subject, list):
+                return "Invalid user", 400
             current_members = await main.db("SELECT can_post_room_reservation FROM user_groups WHERE id = ?", (group_id,))
-            # Remove the member from the list
-            current_members = current_members[0]['can_post_room_reservation'].split(',')
-            current_members.remove(can_post_room_reservation)
-            # Update the member list in the database
+            current_members = current_members[0][0].split(',')
+            for member in subject:
+                if member in current_members:
+                    current_members.remove(member)
             await main.db("UPDATE user_groups SET can_post_room_reservation = ? WHERE id = ?", (','.join(current_members), group_id))
             return "Member removed successfully", 200
         else:
@@ -202,8 +238,7 @@ async def get_public_group_list(session_id):
             return "Unauthorized", 401
         # return group id and group name in json format
         groups = await main.db("SELECT id, name FROM user_groups WHERE not_public = 0")
-        # Convert the result to JSON format
-        return main.json.dumps(groups), 200
+        return groups, 200
     except Exception as e:
         print(f"An error occurred while fetching the public group list: {e}")
         return "Internal Server Error", 500
@@ -213,8 +248,10 @@ async def join_public_group(session_id, group_id):
         current_user = await main.users.get_username_from_session(session_id)
 
         # Check if the group is public
-        is_public = await main.db("SELECT 1 FROM user_groups WHERE id = ? AND not_public = 0", (group_id,))
-        if not is_public:
+        not_public = await main.db("SELECT not_public FROM user_groups WHERE id = ?", (group_id,))
+        if not not_public:
+            return "Group not found", 404
+        elif not_public[0][0] != 0:
             return "Group is not public", 403
 
         # Get the current member list
@@ -243,25 +280,29 @@ async def leave_group(session_id, group_id):
 
         group_data = group_data[0]
         # return 403 if user is not in the group
-        if current_user not in group_data['member']:
+        if current_user not in group_data[4].split(','):
             return "User is not a member of the group", 403
+
         # Remove the user from each list
-        for key in ['admin', 'can_post_announcement', 'can_post_assessment', 'can_post_pull', 'member']:
-            if group_data[key]:
-                members_list = group_data[key].split(',')
-                if current_user in members_list:
-                    members_list.remove(current_user)
-                    group_data[key] = ','.join(members_list)
-                else:
-                    group_data[key] = ','.join(members_list)
+        query = 'UPDATE user_groups SET'
+        params = []
+        columns = ["admin", "can_post_announcement", "can_post_assessment", "can_post_pull", "member"]
+        for i in range(5):
+            try:
+                lst = group_data[i].split(',')
+                if current_user in lst:
+                    lst.remove(current_user)
+                    query += f' {columns[i]} = ?,'
+                    params.append(','.join(lst))
+            except:
+                pass
 
-        # Update the database with the modified lists
-        await main.db("""
-            UPDATE user_groups
-            SET admin = ?, can_post_announcement = ?, can_post_assessment = ?, can_post_pull = ?, member = ?
-            WHERE id = ?
-        """, (group_data['admin'], group_data['can_post_announcement'], group_data['can_post_assessment'], group_data['can_post_pull'], group_data['member'], group_id))
+        query = query.rstrip(',') + ' WHERE id = ?'
+        params.append(group_id)
 
+        if len(params) == 1:
+            return "User is not a member of the group", 403
+        await main.db(query, tuple(params))
         return "Exited group successfully", 200
     except Exception as e:
         print(f"An error occurred while exiting the group: {e}")
