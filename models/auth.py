@@ -1,7 +1,6 @@
 import configparser
 from itsdangerous import URLSafeTimedSerializer
 from werkzeug.security import generate_password_hash
-
 import main
 
 config = configparser.ConfigParser()

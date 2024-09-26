@@ -16,7 +16,13 @@ async def get_user_groups(session_id, username = None):
         # return group id and group name in json format
         groups = await main.db("SELECT id, name FROM user_groups WHERE member LIKE ?", ('%' + username + '%',))
         # Convert the result to JSON format
-        return main.json.dumps(groups), 200
+        res = []
+        for group in groups:
+            res.append({
+                'id': group[0],
+                'name': group[1]
+            })
+        return res,200
     except Exception as e:
         print(f"An error occurred while fetching the user's groups: {e}")
         return "Internal Server Error", 500
@@ -28,6 +34,9 @@ async def create_group(session_id, group_name, admin, not_public=0, can_post_ann
         is_admin = await main.db("SELECT * FROM user_groups WHERE id = ? AND member LIKE ?", (main.GLOBAL_ADMIN, '%' + current_user + '%',))
         if not is_admin:
             return "Unauthorized", 401
+        # Check if admin is in the member list
+        if admin not in members:
+            members.append(admin)
 
         # Insert the new group into the database
         await main.db('''
@@ -186,8 +195,11 @@ async def modify_group(session_id, group_id, action, admin=None, not_public=None
         print(f"An error occurred while modifying the group: {e}")
         return "Internal Server Error", 500
 
-async def get_public_group_list():
+async def get_public_group_list(session_id):
     try:
+        username = await main.users.get_username_from_session(session_id)
+        if not username:
+            return "Unauthorized", 401
         # return group id and group name in json format
         groups = await main.db("SELECT id, name FROM user_groups WHERE not_public = 0")
         # Convert the result to JSON format
@@ -220,7 +232,7 @@ async def join_public_group(session_id, group_id):
         print(f"An error occurred while joining the group: {e}")
         return "Internal Server Error", 500
 
-async def exit_group(session_id, group_id):
+async def leave_group(session_id, group_id):
     try:
         current_user = await main.users.get_username_from_session(session_id)
 
@@ -270,4 +282,3 @@ async def get_post_permissions(session_id, group_id, post_type):
     except Exception as e:
         print(f"An error occurred while fetching the post permissions: {e}")
         return "Internal Server Error", 500
-

@@ -19,7 +19,7 @@ async def create_room(session_id, name, open_time, close_time, available_days, u
         print(f"An error occurred while creating room: {e}")
         return 'Internal Server Error', 500
 
-async def modify_room(session_id, room_id, name=None, open_time=None, close_time=None, available_days=None, unavailable_periods=None, status=None):
+async def modify_room(session_id, room_id, action, name=None, open_time=None, close_time=None, available_days=None, unavailable_periods=None):
     try:
         username = await main.users.get_username_from_session(session_id)
         is_admin = await main.users.check_if_user_is_admin(username, 'global')
@@ -27,51 +27,41 @@ async def modify_room(session_id, room_id, name=None, open_time=None, close_time
             is_admin = await main.users.check_if_user_is_admin(username, 'room')
         if not is_admin:
             return 'Unauthorized', 401
-
-        query = "UPDATE rooms SET "
-        params = []
-        if name:
-            query += "name = ?, "
-            params.append(name)
-        if open_time:
-            query += "open_time = ?, "
-            params.append(open_time)
-        if close_time:
-            query += "close_time = ?, "
-            params.append(close_time)
-        if available_days:
-            query += "available_days = ?, "
-            params.append(','.join(map(str, available_days)))
-        if unavailable_periods:
-            query += "unavailable_periods = ?, "
-            params.append(','.join(map(str, unavailable_periods)))
-        if status:
-            query += "status = ?, "
-            params.append(status)
-
-        query = query.rstrip(', ')
-        query += " WHERE id = ?"
-        params.append(room_id)
-
-        await main.db(query, params)
+        if action == 'update':
+            query = "UPDATE rooms SET "
+            params = []
+            if name:
+                query += "name = ?, "
+                params.append(name)
+            if open_time:
+                query += "open_time = ?, "
+                params.append(open_time)
+            if close_time:
+                query += "close_time = ?, "
+                params.append(close_time)
+            if available_days:
+                query += "available_days = ?, "
+                params.append(','.join(map(str, available_days)))
+            if unavailable_periods:
+                query += "unavailable_periods = ?, "
+                params.append(','.join(map(str, unavailable_periods)))
+            query = query.rstrip(', ')
+            query += " WHERE id = ?"
+            params.append(room_id)
+            await main.db(query, params)
+        elif action == 'delete':
+            await main.db("DELETE FROM rooms WHERE id = ?", (room_id,))
+        elif action == 'deactivate':
+            await main.db("UPDATE rooms SET status = 0 WHERE id = ?", (room_id,))
+        elif action == 'activate':
+            await main.db("UPDATE rooms SET status = 1 WHERE id = ?", (room_id,))
+        else:
+            return 'Invalid action', 400
         return 'Room modified', 200
     except Exception as e:
         print(f"An error occurred while modifying room: {e}")
         return 'Internal Server Error', 500
 
-async def delete_room(session_id, room_id):
-    try:
-        username = await main.users.get_username_from_session(session_id)
-        is_admin = await main.users.check_if_user_is_admin(username, 'global')
-        if not is_admin:
-            is_admin = await main.users.check_if_user_is_admin(username, 'room')
-        if not is_admin:
-            return 'Unauthorized', 401
-        await main.db("DELETE FROM rooms WHERE id = %s", (room_id,))
-        return 'Room deleted', 200
-    except Exception as e:
-        print(f"An error occurred while deleting room: {e}")
-        return 'Internal Server Error', 500
 
 async def get_rooms(session_id, admin = False):
     try:
@@ -94,8 +84,6 @@ async def get_rooms(session_id, admin = False):
     except Exception as e:
         print(f"An error occurred while fetching rooms: {e}")
         return 'Internal Server Error', 500
-
-import datetime
 
 async def get_available_rooms_by_time(session_id, start_time, end_time):
     try:
@@ -205,7 +193,7 @@ async def get_available_times_by_room(session_id, room_id, start_time, end_time)
         print(f"An error occurred while fetching available times: {e}")
         return 'Internal Server Error', 500
 
-async def get_reservations(session_id, start_time, end_time, room=None, user=None, admin = False):
+async def get_reservations(session_id, start_time, end_time, room_id=None, user=None, id = None, admin = False):
     try:
         username = await main.users.get_username_from_session(session_id)
         if not username:
@@ -223,12 +211,15 @@ async def get_reservations(session_id, start_time, end_time, room=None, user=Non
             WHERE (start_time BETWEEN ? AND ? OR end_time BETWEEN ? AND ?)
             """
             params = [start_time, end_time, start_time, end_time]
-            if room:
+            if room_id:
                 query += " AND room_id = ?"
-                params.append(room)
+                params.append(room_id)
             if user:
                 query += " AND username = ?"
                 params.append(user)
+            if id:
+                query += " AND id = ?"
+                params.append(id)
 
             reservations = await main.db(query, params)
         else:
@@ -238,12 +229,15 @@ async def get_reservations(session_id, start_time, end_time, room=None, user=Non
             WHERE (start_time BETWEEN ? AND ? OR end_time BETWEEN ? AND ?)
             """
             params = [start_time, end_time, start_time, end_time]
-            if room:
+            if room_id:
                 query += " AND room_id = ?"
-                params.append(room)
+                params.append(room_id)
             if user:
                 query += " AND username = ?"
                 params.append(user)
+            if id:
+                query += " AND id = ?"
+                params.append(id)
 
             reservations = await main.db(query, params)
         reservations = main.json.dumps(reservations)

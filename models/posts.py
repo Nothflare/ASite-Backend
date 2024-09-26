@@ -60,11 +60,16 @@ async def get_posts(session_id, post_type, start_from=0, view_type='public', id=
             if admin:
                 res = await main.db("SELECT id, title, author, label, created_at, start_at, end_at, post_as FROM posts WHERE author = ? AND post_type = ? LIMIT 30 OFFSET ?", (id, post_type, start_from))
             else:
+                user_groups = await main.groups.get_user_groups(session_id)
+                # Converting user_groups to a list of group ids
+                group_ids = [group[0] for group in user_groups]
                 res = await main.db("SELECT id, title, author, label, created_at, start_at, end_at, post_as FROM posts WHERE author = ? AND post_type = ? AND (permission IS NULL OR EXISTS (SELECT 1 FROM json_each(permission) WHERE value IN (?))) LIMIT 30 OFFSET ?", (id, post_type, ','.join(map(str, group_ids)), start_from))
         elif view_type == 'group' and id:
             if admin:
                 res = await main.db("SELECT id, title, author, label, created_at, start_at, end_at, post_as FROM posts WHERE post_as = ? AND post_type = ? LIMIT 30 OFFSET ?", (id, post_type, start_from))
             else:
+                user_groups = await main.groups.get_user_groups(session_id)
+                group_ids = [group[0] for group in user_groups]
                 res = await main.db("SELECT id, title, author, label, created_at, start_at, end_at, post_as FROM posts WHERE post_as = ? AND post_type = ? AND (permission IS NULL OR EXISTS (SELECT 1 FROM json_each(permission) WHERE value IN (?))) LIMIT 30 OFFSET ?", (id, post_type, ','.join(map(str, group_ids)), start_from))
         else:
             return "Invalid view type or missing id", 400
@@ -222,7 +227,7 @@ async def modify_post(session_id, post_id, action, title=None, content=None, lab
         print(f"An error occurred while modifying the post: {e}")
         return "Internal Server Error", 500
 
-async def follow_post(session_id, post_id):
+async def follow_post(session_id, post_id, action):
     try:
         # Query the database to get the post's permission
         res = await main.db("SELECT permission FROM posts WHERE id = ?", (post_id,))
@@ -241,10 +246,18 @@ async def follow_post(session_id, post_id):
         # check if post_id is already in following_posts
         following_posts = await main.db("SELECT following_posts FROM users WHERE username = ?", (user,))
         following_posts = following_posts[0][0]
-        if post_id in following_posts:
-            return "Post already followed", 200
-        following_posts.append(post_id)
-        following_posts = ",".join([str(post_id) for post_id in following_posts])
+        if action =="follow":
+            if post_id in following_posts:
+                return "Post already followed", 200
+            following_posts.append(post_id)
+            following_posts = ",".join([str(post_id) for post_id in following_posts])
+        elif action == "unfollow":
+            if post_id not in following_posts:
+                return "Post not followed", 200
+            following_posts.remove(post_id)
+            following_posts = ",".join([str(post_id) for post_id in following_posts])
+        else:
+            return "Invalid action", 400
         await main.db("UPDATE users SET following_posts = ? WHERE username = ?", (following_posts, user))
         return "Post followed successfully", 200
     except Exception as e:

@@ -6,7 +6,10 @@ from werkzeug.security import generate_password_hash, check_password_hash
 #ststus: 0=inactive, 1=active
 
 async def get_username_from_session(session_id):
-    return main.session[session_id]
+    try:
+        return main.session[session_id]
+    except:
+        return None
 async def get_user_id_from_username(username):
     res = await main.db("SELECT id FROM users WHERE username = ?", (username,))
     return res[0][0]
@@ -68,7 +71,7 @@ async def login(username, password):
             if check_password_hash(res[0][2], password):
                 session_id = secrets.token_hex(16)
                 main.session[session_id] = username
-                resp = main.make_response("Login successful")
+                resp = main.make_response(main.jsonify("Login successful"))
                 resp.set_cookie('session_id', session_id, max_age=3600, httponly=True, secure=True, samesite='Strict')
                 return resp
             else:
@@ -81,9 +84,9 @@ async def logout(session_id):
     try:
         if session_id in main.session:
             del main.session[session_id]
-            resp = main.make_response("Logout successful")
+            resp = main.make_response(main.jsonify("Logout successful"))
             resp.delete_cookie('session_id')
-            return resp, 200
+            return resp
         else:
             return "Session not found", 404
     except Exception as e:
@@ -94,10 +97,14 @@ async def logout(session_id):
 async def modify_user(session_id, target_username, action, password=None, bio=None, admin=False):
     try:
         # Verify session and get the username
-        username = await main.users.get_username_from_session(session_id)
+        username = await get_username_from_session(session_id)
+        if not username:
+            return 'Unauthorized', 401
         if admin:
             user_groups = await main.groups.get_user_groups(session_id)
-            group_ids = [group[0] for group in user_groups]
+            user_groups = user_groups[0]
+            # '[{"id": 1, "name": "admin"}]'
+            group_ids = [group['id'] for group in user_groups]
             if not 1 in group_ids:
                 return 'Forbidden', 403
         elif not username or username != target_username:
@@ -108,10 +115,10 @@ async def modify_user(session_id, target_username, action, password=None, bio=No
             if password:
                 password_hash = generate_password_hash(password)
                 await main.db("UPDATE users SET password = ? WHERE username = ?", (password_hash, target_username))
-            if bio:
+            elif bio:
                 await main.db("UPDATE users SET bio = ? WHERE username = ?", (bio, target_username))
             else:
-                return "Missing para.", 400
+                return "Missing param", 400
         elif action == 'delete':
             if admin:
                 await main.db("DELETE FROM users WHERE username = ?", (target_username,))
@@ -120,6 +127,11 @@ async def modify_user(session_id, target_username, action, password=None, bio=No
         elif action == 'deactivate':
             if admin:
                 await main.db("UPDATE users SET status = 0 WHERE username = ?", (target_username,))
+            else:
+                return 'Forbidden', 403
+        elif action == 'activate':
+            if admin:
+                await main.db("UPDATE users SET status = 1 WHERE username = ?", (target_username,))
             else:
                 return 'Forbidden', 403
 

@@ -7,73 +7,6 @@ config.read('config.conf')
 
 DATABASE_PATH = config['database']['path']
 
-'''
-database format:
-- users
-    - id
-    - username
-    - password
-    - email
-    - created_at
-    - updated_at
-    - bio
-    - following_posts
-    - status
-- user_groups
-    - id
-    - name
-    - admin
-    - not_public (0 or 1) - 0 means public(default), 1 means private
-    - can_post_announcement
-    - can_post_assessment
-    - can_post_pull
-    - can_post_room_reservation
-    - member
-- unverified_users
-    - username
-    - password
-    - email
-    - created_at
-- posts
-    - id
-    - title
-    - content
-    - author
-    - type
-    - label
-    - permission
-    - post_as
-    - start_at
-    - end_at
-    - created_at
-    - updated_at
--pulls
-    - post_id
-    - agree
-    - disagree
-- rooms
-    - id
-    - name
-    - open_time
-    - close_time
-    - available_days
-    - unavailable_periods
-    - status
-- reservations
-    - id
-    - room_id
-    - username
-    - for (user groups)
-    - reason
-    - start_time
-    - end_time
-    - created_at
-    - approval_status
-    - approved_by
-    - approved_at
-    - approved_reason
-'''
-
 def initialize_database():
     if not os.path.exists(DATABASE_PATH):
         with sqlite3.connect(DATABASE_PATH) as db:
@@ -87,8 +20,7 @@ def initialize_database():
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     bio TEXT,
                     following_posts TEXT,
-                    status INTEGER DEFAULT 1,
-                    FOREIGN KEY (group) REFERENCES user_groups(id)
+                    status INTEGER DEFAULT 1
                 )
             ''')
             db.execute('''
@@ -167,5 +99,4 @@ def initialize_database():
             ''')
             db.commit()
 
-# Call this function at the start of your application
 initialize_database()
